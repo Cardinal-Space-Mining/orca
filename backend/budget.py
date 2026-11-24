@@ -4,7 +4,8 @@ against the guidebook's 4,000 Kbps, measured two ways:
 
     interface     byte counters of the robot's link interface (e.g. the VM's
                   Wi-Fi adapter): everything on the link, including TCP/IP,
-                  zenoh and the hub's own traffic. What the limit is about.
+                  zenoh and the orchestrator's own traffic. What the limit is
+                  about.
     net_adapter   the payload net_adapter reports (NetBandwidth): what the
                   robot code sends, with a per-topic breakdown, but without
                   protocol overhead.
@@ -22,8 +23,8 @@ from typing import Optional
 SOURCES = ('interface', 'net_adapter')
 HISTORY_S = 15 * 60
 PUBLISH_PERIOD_S = 1.0
-MONITOR_PROCESS_ID = 'csm-hub-monitor'
-MONITOR_PREFIX = 'CSMHUB '
+MONITOR_PROCESS_ID = 'orchestrator-monitor'
+MONITOR_PREFIX = 'ORCHESTRATOR '
 
 
 class SourceTotals:
@@ -61,8 +62,8 @@ class SourceTotals:
 
 class BudgetTracker:
 
-    def __init__(self, hub):
-        self.hub = hub
+    def __init__(self, orchestrator):
+        self.orchestrator = orchestrator
         self.window_start_s = time.time()
         self.totals = {source: SourceTotals() for source in SOURCES}
         self.channels = []       # latest net_adapter per-topic breakdown
@@ -72,7 +73,7 @@ class BudgetTracker:
         self.publish_handle = None
 
     def settings(self) -> dict:
-        return self.hub.settings['budget']
+        return self.orchestrator.settings['budget']
 
     def limitKbps(self) -> float:
         settings = self.settings()
@@ -83,7 +84,7 @@ class BudgetTracker:
         self.window_start_s = time.time()
         self.totals = {source: SourceTotals() for source in SOURCES}
         self.pending_points = {source: [] for source in SOURCES}
-        self.hub.publish('budget', self.snapshot(with_history=True))
+        self.orchestrator.publish('budget', self.snapshot(with_history=True))
 
     # --- Samples ---
 
@@ -155,7 +156,7 @@ class BudgetTracker:
         snapshot = self.snapshot(with_history=False)
         snapshot['new_points'] = self.pending_points
         self.pending_points = {source: [] for source in SOURCES}
-        self.hub.publish('budget', snapshot)
+        self.orchestrator.publish('budget', snapshot)
 
     def snapshot(self, with_history: bool = True) -> dict:
         snapshot = {

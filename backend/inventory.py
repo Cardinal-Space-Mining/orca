@@ -1,12 +1,14 @@
 '''
-Machine inventory: which machines the hub manages and how to reach them.
+Machine inventory: which machines the orchestrator manages and how to reach
+them.
 
 Two files are merged, the second overriding entries of the first by id:
-    <workspace>/src/project/hub/machines.json   the team's machines (versioned
-                                                with the code they run)
-    ~/.config/csm-hub/machines.json             this user's own machines,
+    <workspace>/src/project/orchestrator/machines.json
+            the team's machines (versioned with the code they run)
+    ~/.config/orchestrator/machines.json
+            this user's own machines,
                                                 e.g. a personal test rig
-The hub's own machine is always present as "local".
+The orchestrator's own machine is always present as "local".
 
 File format:
     {
@@ -42,8 +44,10 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
-PROJECT_INVENTORY_PATH = os.path.join('src', 'project', 'hub', 'machines.json')
-USER_INVENTORY_PATH = os.path.expanduser('~/.config/csm-hub/machines.json')
+PROJECT_INVENTORY_PATH = os.path.join('src', 'project', 'orchestrator',
+                                      'machines.json')
+USER_INVENTORY_PATH = os.path.expanduser(
+    '~/.config/orchestrator/machines.json')
 LOCAL_MACHINE_ID = 'local'
 
 
@@ -159,7 +163,7 @@ def readInventoryFile(path: str) -> list:
 def localMachine(workspace_root: Optional[str]) -> Machine:
     return Machine(id=LOCAL_MACHINE_ID,
                    label=socket.gethostname().split('.')[0],
-                   role='This machine (runs the hub)', is_local=True,
+                   role='This machine (runs the orchestrator)', is_local=True,
                    workspace=workspace_root, source='built in')
 
 

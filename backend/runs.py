@@ -8,7 +8,7 @@ processes start in dependency order, and if one fails to start, the ones
 already started are stopped again so nothing is left half up.
 
 Processes keep their run information in the agent (the "meta" of each
-process), so a restarted hub finds its runs again.
+process), so a restarted orchestrator finds its runs again.
 '''
 
 from __future__ import annotations
@@ -126,8 +126,8 @@ def parseExtraArguments(text: str) -> dict:
 
 class Planner:
 
-    def __init__(self, hub):
-        self.hub = hub
+    def __init__(self, orchestrator):
+        self.orchestrator = orchestrator
 
     def plan(self, scenario: dict, request: dict) -> dict:
         '''request: {"assignment": {role: machine id},
@@ -173,7 +173,7 @@ class Planner:
         return options
 
     def checkMachine(self, scenario, role, machine_id, plan):
-        link = self.hub.links_by_id.get(machine_id)
+        link = self.orchestrator.links_by_id.get(machine_id)
         label = scenario['roles'][role].get('label', role)
         if link is None:
             plan['errors'].append('%s: no machine %s' % (label, machine_id))
@@ -193,7 +193,7 @@ class Planner:
         elif workspace and not workspace.get('has_install'):
             plan['errors'].append('%s: %s has no build (install/ missing)'
                                   % (label, link.machine.label))
-        reference = self.hub.referenceFingerprint()
+        reference = self.orchestrator.referenceFingerprint()
         if workspace and reference and not link.machine.is_local \
                 and workspace.get('fingerprint') != reference:
             plan['warnings'].append(
@@ -209,7 +209,8 @@ class Planner:
             if not any(process.get('role') == role and 'lance' in process
                        for process in scenario.get('processes') or []):
                 continue
-            workspace = self.hub.links_by_id[machine_id].state['workspace']
+            link = self.orchestrator.links_by_id[machine_id]
+            workspace = link.state['workspace']
             if workspace and workspace.get('fingerprint'):
                 fingerprints.setdefault(workspace['fingerprint'], []).append(
                     scenario['roles'][role].get('label', role))
@@ -224,13 +225,13 @@ class Planner:
 
     def addressesFor(self, process, assignment, request) -> tuple:
         '''Fill {ip:role} for one process. Returns (addresses, choices).'''
-        link = self.hub.links_by_id[assignment[process['role']]]
+        link = self.orchestrator.links_by_id[assignment[process['role']]]
         overrides = request.get('addresses') or {}
         addresses = {}
         choices = {}
         for role, machine_id in assignment.items():
             candidates = addressCandidates(
-                self.hub.links_by_id[machine_id], link)
+                self.orchestrator.links_by_id[machine_id], link)
             choices[role] = candidates
             chosen = overrides.get(process['key'] + '.' + role)
             if chosen:
@@ -241,7 +242,7 @@ class Planner:
 
     def planProcess(self, process, assignment, options, request) -> dict:
         role = process['role']
-        link = self.hub.links_by_id[assignment[role]]
+        link = self.orchestrator.links_by_id[assignment[role]]
         addresses, choices = self.addressesFor(process, assignment, request)
         used_roles = sorted({argument for name, argument
                              in placeholdersIn(process) if name == 'ip'})
@@ -251,7 +252,7 @@ class Planner:
                     '%s: no network shared by %s and %s; set the address by '
                     'hand' % (process.get('label', process['key']),
                               link.machine.label,
-                              self.hub.links_by_id[
+                              self.orchestrator.links_by_id[
                                   assignment[used_role]].machine.label))
         entry = {
             'key': process['key'],
@@ -284,10 +285,10 @@ class Planner:
         return entry
 
     def planLance(self, lance, entry, link, options, addresses, extra):
-        config = self.hub.lanceConfig()
+        config = self.orchestrator.lanceConfig()
         if config is None:
-            raise PlanError("the hub has no workspace, so it can't plan "
-                            "lance launches")
+            raise PlanError("the orchestrator has no workspace, so it can't "
+                            "plan lance launches")
         arguments = {key: str(value) for key, value in fillTemplate(
             lance.get('args') or {}, options, addresses).items()}
         arguments.update(extra)
@@ -334,9 +335,9 @@ class Run:
     they've run for start_delay_s) or tasks ("task": true; dependents start
     once they've exited successfully, e.g. a push before its build)."""
 
-    def __init__(self, hub, run_id: str, label: str, scenario_id: str,
+    def __init__(self, orchestrator, run_id: str, label: str, scenario_id: str,
                  plan: Optional[dict] = None, kind: str = 'launch'):
-        self.hub = hub
+        self.orchestrator = orchestrator
         self.run_id = run_id
         self.label = label
         self.scenario_id = scenario_id
@@ -382,7 +383,7 @@ class Run:
         }
 
     def publish(self):
-        self.hub.publish('run', self.snapshot())
+        self.orchestrator.publish('run', self.snapshot())
 
     def processId(self, key: str) -> str:
         return self.run_id + '.' + key
@@ -458,14 +459,14 @@ class Run:
             time.time() - record['started_s'] >= entry['start_delay_s']
 
     async def startProcess(self, entry):
-        link = self.hub.links_by_id[entry['machine_id']]
+        link = self.orchestrator.links_by_id[entry['machine_id']]
         if 'run_script' in entry:
             argv = [entry['run_script']] + entry['flags'] + [
                 '%s:=%s' % item for item in entry['arguments'].items()]
             if entry['overlay']:
                 path = posixpath.join(
                     entry['overlay_directory'],
-                    'csm-hub-%s.json' % self.processId(entry['key']))
+                    'orchestrator-%s.json' % self.processId(entry['key']))
                 written = await link.call('file.write', {
                     'path': path, 'content': overlayJson(entry['overlay'])})
                 argv.append('json_path:=' + written['path'])
@@ -490,8 +491,8 @@ class Run:
         driver station that commands it.'''
         self.is_stopping = True
         self.publish()
-        # By actual start time: a run recovered after a hub restart lists its
-        # processes in the order the machines reconnected.
+        # By actual start time: a run recovered after an orchestrator restart
+        # lists its processes in the order the machines reconnected.
         newest_first = sorted(
             self.processes, reverse=True,
             key=lambda key: (self.processes[key]['record'] or {}).get(
@@ -501,7 +502,7 @@ class Run:
             record = entry['record']
             if not record or record['state'] == 'exited':
                 continue
-            link = self.hub.links_by_id.get(entry['machine_id'])
+            link = self.orchestrator.links_by_id.get(entry['machine_id'])
             if link is None or link.connection is None:
                 continue
             try:

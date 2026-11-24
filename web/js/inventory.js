@@ -9,11 +9,11 @@ import { html, getJson, postJson } from './common.js';
 
 const SCOPES = [
     { id: 'project', label: 'Team machines',
-      help: 'src/project/hub/machines.json: shared with the team through '
-          + 'git (commit it after editing).' },
+      help: 'src/project/orchestrator/machines.json: shared with the team '
+          + 'through git (commit it after editing).' },
     { id: 'user', label: 'My machines',
-      help: '~/.config/csm-hub/machines.json: only on this laptop. Entries '
-          + 'here replace team entries with the same id.' },
+      help: '~/.config/orchestrator/machines.json: only on this laptop. '
+          + 'Entries here replace team entries with the same id.' },
 ];
 
 const EMPTY_ROUTE = { host: '', user: '' };

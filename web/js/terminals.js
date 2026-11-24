@@ -1,6 +1,6 @@
 // Terminals: shells on any machine and VM serial consoles, shown in a dock
 // at the bottom of every page. xterm.js (web/vendor) draws them; keystrokes
-// go to the hub by POST and output comes back on the event stream.
+// go to the orchestrator by POST and output comes back on the event stream.
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { html, postJson } from './common.js';
@@ -241,7 +241,7 @@ function Icon({ name }) {
 // Docked at the bottom or the right, resizable by dragging its inner edge,
 // maximizable; remembered per browser. The page makes room for it (body
 // padding), so it never covers anything.
-const LAYOUT_KEY = 'csm-hub.terminal-dock';
+const LAYOUT_KEY = 'orchestrator.terminal-dock';
 const MIN_SIZE = 160;
 const MINIMIZED_HEIGHT = 41;
 const TOPBAR_HEIGHT = 60;

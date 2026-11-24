@@ -1,9 +1,9 @@
 '''
 SSH command lines for reaching machines.
 
-The hub builds every SSH option itself instead of relying on ~/.ssh/config, so
-it behaves the same on every operator's laptop. ~/.ssh/config still applies to
-anything not set here (keys, for example).
+The orchestrator builds every SSH option itself instead of relying on
+~/.ssh/config, so it behaves the same on every operator's laptop. ~/.ssh/config
+still applies to anything not set here (keys, for example).
 
 Jumps use ProxyCommand rather than ProxyJump: ProxyJump starts the jump
 connection with only the config file's options, so BatchMode wouldn't apply
@@ -25,7 +25,7 @@ SSH_OPTIONS = [
     '-o', 'ServerAliveCountMax=3',
 ]
 
-AGENT_REMOTE_PATH = '"$HOME/.csm-hub/agent.py"'
+AGENT_REMOTE_PATH = '"$HOME/.orchestrator/agent.py"'
 
 # Runs in the remote user's login shell (zsh on macOS, bash on Ubuntu).
 ATTACH_COMMAND = (
@@ -34,9 +34,9 @@ ATTACH_COMMAND = (
     + 'exec python3 -u ' + AGENT_REMOTE_PATH + ' attach')
 
 DEPLOY_COMMAND = (
-    'mkdir -p "$HOME/.csm-hub" && '
-    'cat > "$HOME/.csm-hub/agent.py.new" && '
-    'mv "$HOME/.csm-hub/agent.py.new" ' + AGENT_REMOTE_PATH)
+    'mkdir -p "$HOME/.orchestrator" && '
+    'cat > "$HOME/.orchestrator/agent.py.new" && '
+    'mv "$HOME/.orchestrator/agent.py.new" ' + AGENT_REMOTE_PATH)
 
 
 def sshBaseCommand(route: Route, jumpRouteFor) -> list:

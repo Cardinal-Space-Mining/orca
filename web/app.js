@@ -1,10 +1,10 @@
-// csm-hub web interface. Preact + htm, loaded as plain ES modules (no build
-// step): edit a file under js/ and reload the page.
+// The orchestrator's web interface. Preact + htm, loaded as plain ES modules
+// (no build step): edit a file under js/ and reload the page.
 
 import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { html, shortCommit } from './js/common.js';
-import { useHubState, useNow } from './js/state.js';
+import { useOrchestratorState, useNow } from './js/state.js';
 import { MachinesView } from './js/machines.js';
 import { LaunchView } from './js/launch.js';
 import { RunsView, isRunActive } from './js/runs.js';
@@ -56,7 +56,7 @@ function TopBar({ state, isLive, tab, navigate }) {
     return html`
         <header class="topbar">
             <div class="brand"><img src="/static/csm-logo-dark.svg" alt="" />
-                CSM Hub</div>
+                Orchestrator</div>
             <nav class="tabs">
                 ${TABS.map((entry) => html`
                     <button class="tab ${tab === entry.id ? 'active' : ''}"
@@ -76,13 +76,14 @@ function TopBar({ state, isLive, tab, navigate }) {
                 </div>`}
             ${state && state.settings.competition_mode && html`
                 <a class="competition-pill" href="#/network"
-                    title="Competition mode: less hub traffic on the robot's link">
+                    title=${'Competition mode: less orchestrator traffic on '
+                        + "the robot's link"}>
                     Competition${state.budget.sources.interface.average_kbps
                         != null ? ` · ${Math.round(state.budget.sources
                             .interface.average_kbps)} kbps avg` : ''}</a>`}
             <div class="live">
                 <span class="dot ${isLive ? 'good' : 'bad pulse'}"></span>
-                ${isLive ? 'Live' : 'Hub disconnected'}
+                ${isLive ? 'Live' : 'Orchestrator disconnected'}
             </div>
         </header>`;
 }
@@ -119,7 +120,7 @@ function Page({ state, location, navigate, now }) {
 }
 
 function App() {
-    const { state, isLive } = useHubState();
+    const { state, isLive } = useOrchestratorState();
     const [location, navigate] = useLocation();
     const now = useNow();
     return html`
@@ -128,7 +129,8 @@ function App() {
         <main>
             ${state ? html`<${Page} state=${state} location=${location}
                 navigate=${navigate} now=${now} />`
-                : html`<div class="placeholder">Connecting to the hub…</div>`}
+                : html`<div class="placeholder">
+                    Connecting to the orchestrator…</div>`}
         </main>
         <${TerminalDock} />`;
 }

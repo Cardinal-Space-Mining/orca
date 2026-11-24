@@ -1,4 +1,4 @@
-// The runs page: everything the hub has launched, with live output.
+// The runs page: everything the orchestrator has launched, with live output.
 
 import { useState } from 'preact/hooks';
 import { html, formatDuration, formatAgo, getJson, postJson }
@@ -196,8 +196,8 @@ export function RunsView({ state, selectedId, onSelect, now }) {
     return html`
         <div class="page-head"><div>
             <h1>Runs</h1>
-            <p>Processes keep running if the hub disconnects; reopen the hub to
-                see them again.</p>
+            <p>Processes keep running if the orchestrator disconnects; reopen
+                the orchestrator to see them again.</p>
         </div></div>
         ${runs.length === 0
             ? html`<div class="placeholder">Nothing launched yet.</div>`

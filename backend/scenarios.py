@@ -1,8 +1,8 @@
 '''
 Scenarios: named setups that start processes on one or more machines.
 
-One JSON file per scenario in <workspace>/src/project/hub/scenarios/ (the file
-name is its id):
+One JSON file per scenario in <workspace>/src/project/orchestrator/scenarios/
+(the file name is its id):
 
     {
         "label": "Competition run",
@@ -44,8 +44,8 @@ name is its id):
 Placeholders in args, set values and commands:
     {option}    an option's value
     {ip:role}   the address of the role's machine, as reached from the
-                machine this process runs on (the hub picks one on a shared
-                network; it can be overridden at launch)
+                machine this process runs on (the orchestrator picks one on a
+                shared network; it can be overridden at launch)
 
 "set" changes single values of the actions the presets select, which the
 `key:=value` command line can't do (see lance_config.py).
@@ -59,7 +59,8 @@ import os
 import re
 
 
-SCENARIO_DIRECTORY = os.path.join('src', 'project', 'hub', 'scenarios')
+SCENARIO_DIRECTORY = os.path.join('src', 'project', 'orchestrator',
+                                  'scenarios')
 PLACEHOLDER = re.compile(r'\{([A-Za-z_][\w-]*)(?::([\w-]+))?\}')
 
 
@@ -150,7 +151,7 @@ def checkScenario(scenario_id: str, data: dict) -> None:
 
 def loadScenarios(workspace_root) -> tuple:
     '''Returns (scenarios sorted for display, errors). A broken file is
-    reported instead of stopping the hub.'''
+    reported instead of stopping the orchestrator.'''
     if not workspace_root:
         return [], []
     scenarios = []

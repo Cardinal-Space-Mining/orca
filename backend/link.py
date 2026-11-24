@@ -1,5 +1,5 @@
 '''
-Links from the hub to each machine's agent.
+Links from the orchestrator to each machine's agent.
 
 A MachineLink keeps one agent connection alive: it tries the machine's routes
 in order, installs or updates the agent when needed, polls status while
@@ -27,7 +27,7 @@ CALL_TIMEOUT_S = 15.0
 DEPLOY_TIMEOUT_S = 30.0
 RECONNECT_DELAYS_S = [2, 5, 10, 20]
 # Polling periods: (normal, competition mode). Competition mode keeps the
-# hub's own traffic on the robot's link small.
+# orchestrator's own traffic on the robot's link small.
 STATS_INTERVAL_S = (2.0, 10.0)
 PING_PERIOD_S = (5.0, 15.0)
 VM_PERIOD_S = (5.0, 15.0)
@@ -80,7 +80,8 @@ class AgentConnection:
         self.first_event = asyncio.get_running_loop().create_future()
         self.closed = asyncio.Event()
         self.stderr_lines = collections.deque(maxlen=20)
-        # Payload bytes through this connection, for the hub's own traffic.
+        # Payload bytes through this connection, for the orchestrator's own
+        # traffic.
         self.bytes_received = 0
         self.bytes_sent = 0
         self.reader_task = asyncio.ensure_future(self.readStdout())
@@ -189,8 +190,8 @@ class AgentConnection:
 
 
 class ProcessMirror:
-    """The hub's copy of one agent process: its latest record and recent
-    output lines, numbered as the agent numbers them."""
+    """The orchestrator's copy of one agent process: its latest record and
+    recent output lines, numbered as the agent numbers them."""
 
     def __init__(self, record: dict):
         self.record = record
@@ -241,10 +242,11 @@ class ProcessMirror:
 
 
 class MachineLink:
-    """Keeps the hub connected to one machine and holds its latest state."""
+    """Keeps the orchestrator connected to one machine and holds its latest
+    state."""
 
-    def __init__(self, hub, machine: Machine):
-        self.hub = hub
+    def __init__(self, orchestrator, machine: Machine):
+        self.orchestrator = orchestrator
         self.machine = machine
         self.connection: Optional[AgentConnection] = None
         self.active_route: Optional[Route] = None
@@ -260,7 +262,7 @@ class MachineLink:
                            'rtt_ms': None, 'clock_offset_ms': None,
                            'agent_hash': None, 'update_pending': False,
                            'unknown_host_key': None, 'error_details': None,
-                           'hub_kbps': None},
+                           'orchestrator_kbps': None},
             'info': None,
             'stats': None,
             'workspace': None,
@@ -273,7 +275,7 @@ class MachineLink:
         return dict(self.state, machine=self.machine.toJson())
 
     def publish(self):
-        self.hub.publish('machine', self.snapshot())
+        self.orchestrator.publish('machine', self.snapshot())
 
     def setConnection(self, **changes):
         connection = self.state['connection']
@@ -418,8 +420,10 @@ class MachineLink:
 
     def attachCommand(self, route: Optional[Route]) -> list:
         if route is None:
-            return [sys.executable, '-u', self.hub.agent_path, 'attach']
-        return sshCommand(route, self.hub.jumpRouteFor, ATTACH_COMMAND)
+            return [sys.executable, '-u', self.orchestrator.agent_path,
+                    'attach']
+        return sshCommand(route, self.orchestrator.jumpRouteFor,
+                          ATTACH_COMMAND)
 
     # --- Agent install and update ---
 
@@ -457,16 +461,17 @@ class MachineLink:
             return 'failed'
 
         hello = first['data']
-        if hello['agent_hash'] == self.hub.agent_hash:
+        if hello['agent_hash'] == self.orchestrator.agent_hash:
             self.setConnection(agent_hash=hello['agent_hash'],
                                update_pending=False, error=None)
             return 'ready'
         return await self.updateAgent(hello, connection, route)
 
     async def updateAgent(self, hello, connection, route) -> str:
-        """The agent runs different code than the hub's copy: replace the file
-        if it differs, then restart the daemon unless it's busy."""
-        if route is not None and hello['file_hash'] != self.hub.agent_hash:
+        """The agent runs different code than the orchestrator's copy: replace
+        the file if it differs, then restart the daemon unless it's busy."""
+        if route is not None \
+                and hello['file_hash'] != self.orchestrator.agent_hash:
             if not await self.deploy(route):
                 return 'failed'
         if not hello['is_idle']:
@@ -490,12 +495,13 @@ class MachineLink:
             return True
         self.setConnection(state='installing agent')
         process = await asyncio.create_subprocess_exec(
-            *sshCommand(route, self.hub.jumpRouteFor, DEPLOY_COMMAND),
+            *sshCommand(route, self.orchestrator.jumpRouteFor, DEPLOY_COMMAND),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE)
         try:
             _, stderr = await asyncio.wait_for(
-                process.communicate(self.hub.agent_bytes), DEPLOY_TIMEOUT_S)
+                process.communicate(self.orchestrator.agent_bytes),
+                DEPLOY_TIMEOUT_S)
         except asyncio.TimeoutError:
             process.kill()
             self.setConnection(error='timed out copying the agent')
@@ -520,7 +526,7 @@ class MachineLink:
         if route is None:
             raise ValueError('no route is waiting for a host key')
         process = await asyncio.create_subprocess_exec(
-            *keyscanCommand(route, self.hub.jumpRouteFor),
+            *keyscanCommand(route, self.orchestrator.jumpRouteFor),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
         output, _ = await asyncio.wait_for(process.communicate(), 20.0)
         keys = [line for line in output.decode().splitlines()
@@ -582,7 +588,7 @@ class MachineLink:
 
     async def syncProcesses(self, connection):
         """Catch up after (re)connecting: watch live output first, then fetch
-        whatever was printed while the hub was away."""
+        whatever was printed while the orchestrator was away."""
         await connection.call('process.watch', self.watchParams())
         for record in await connection.call('process.list'):
             self.onProcessState(record)
@@ -596,7 +602,8 @@ class MachineLink:
                 'lines': backlog['lines']})
 
     def period(self, periods: tuple) -> float:
-        return periods[1 if self.hub.settings['competition_mode'] else 0]
+        competition = self.orchestrator.settings['competition_mode']
+        return periods[1 if competition else 0]
 
     def pollTasks(self) -> list:
         tasks = [self.poll(PING_PERIOD_S, self.measureLatency)]
@@ -630,9 +637,10 @@ class MachineLink:
 
     def watchParams(self) -> dict:
         '''Live output from every process, except in competition mode, where
-        other machines only stream the hub's monitor (output can still be
-        fetched on demand).'''
-        if self.machine.is_local or not self.hub.settings['competition_mode']:
+        other machines only stream the orchestrator's monitor (output can still
+        be fetched on demand).'''
+        if self.machine.is_local \
+                or not self.orchestrator.settings['competition_mode']:
             return {'enabled': True}
         return {'enabled': False, 'process_ids': [MONITOR_PROCESS_ID]}
 
@@ -661,11 +669,12 @@ class MachineLink:
         offset_s = reply['time_s'] - (sent_s + received_s) / 2.0
         self.setConnection(rtt_ms=(received_s - sent_s) * 1000.0,
                            clock_offset_ms=offset_s * 1000.0,
-                           hub_kbps=self.hubTrafficKbps(received_s))
+                           orchestrator_kbps=self.orchestratorTrafficKbps(
+                               received_s))
 
-    def hubTrafficKbps(self, now_s: float):
-        '''The hub's own payload traffic with this machine since the last
-        call (SSH adds a little on top).'''
+    def orchestratorTrafficKbps(self, now_s: float):
+        '''The orchestrator's own payload traffic with this machine since the
+        last call (SSH adds a little on top).'''
         connection = self.connection
         total = connection.bytes_received + connection.bytes_sent
         previous = self.traffic_sample
@@ -691,19 +700,19 @@ class MachineLink:
         if name == 'stats':
             self.addInterfaceRates(data)
             self.state['stats'] = data
-            self.hub.budget.onStats(self.machine.id, data)
+            self.orchestrator.budget.onStats(self.machine.id, data)
             self.publish()
         elif name == 'process.state':
             self.onProcessState(data)
         elif name == 'process.output':
             self.onProcessOutput(data)
         elif name == 'terminal.output':
-            self.hub.publish('terminal.output',
-                             dict(data, machine_id=self.machine.id))
+            self.orchestrator.publish('terminal.output',
+                                      dict(data, machine_id=self.machine.id))
         elif name == 'terminal.exit':
             self.terminals.discard(data['terminal_id'])
-            self.hub.publish('terminal.exit',
-                             dict(data, machine_id=self.machine.id))
+            self.orchestrator.publish('terminal.exit',
+                                      dict(data, machine_id=self.machine.id))
 
     def addInterfaceRates(self, stats: dict):
         '''Bits per second per interface, from the byte counters of this and
@@ -730,7 +739,7 @@ class MachineLink:
     def endTerminals(self):
         '''Terminals live on the connection; tell the browser they ended.'''
         for terminal_id in list(self.terminals):
-            self.hub.publish('terminal.exit', {
+            self.orchestrator.publish('terminal.exit', {
                 'machine_id': self.machine.id, 'terminal_id': terminal_id,
                 'exit_code': None, 'reason': 'connection lost'})
         self.terminals.clear()
@@ -741,7 +750,7 @@ class MachineLink:
             mirror = self.processes[record['process_id']] = \
                 ProcessMirror(record)
         mirror.record = record
-        self.hub.onProcessState(self.machine.id, record)
+        self.orchestrator.onProcessState(self.machine.id, record)
 
     def onProcessOutput(self, data: dict):
         mirror = self.processes.get(data['process_id'])
@@ -749,6 +758,7 @@ class MachineLink:
             return
         mirror.merge(data['first_line_number'], data['lines'])
         if data['process_id'] == MONITOR_PROCESS_ID:
-            self.hub.budget.onMonitorLines(data['lines'])
+            self.orchestrator.budget.onMonitorLines(data['lines'])
             return
-        self.hub.publish('output', dict(data, machine_id=self.machine.id))
+        self.orchestrator.publish('output',
+                                  dict(data, machine_id=self.machine.id))

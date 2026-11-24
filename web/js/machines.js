@@ -155,13 +155,15 @@ function NetworkSection({ stats }) {
         </div>`;
 }
 
-// `reference` is the code fingerprint of the hub's own workspace.
+// `reference` is the code fingerprint of the orchestrator's own workspace.
 function workspaceBadges(workspace, reference, isReference) {
     const badges = [];
     if (isReference) {
-        badges.push(html`<span class="pill accent">hub's copy</span>`);
+        badges.push(html`<span class="pill accent">
+            orchestrator's copy</span>`);
     } else if (reference && workspace.fingerprint === reference) {
-        badges.push(html`<span class="pill good">same code as hub</span>`);
+        badges.push(html`<span class="pill good">
+            same code as orchestrator</span>`);
     } else if (reference) {
         badges.push(html`<span class="pill warn" title="Deploy from the
             Deploy page to make it match">different code</span>`);
@@ -585,11 +587,12 @@ export function MachinesView({ state, now }) {
                 </div>`)}
         </div>
         <footer>
-            ${state.hub.inventory_paths.map((entry) => html`
+            ${state.orchestrator.inventory_paths.map((entry) => html`
                 <span>inventory <span class="mono">${entry.path}</span>
                     ${entry.exists ? '' : html`<span class="faint">${
                         ' (not found)'}</span>`}</span>`)}
-            <span>agent <span class="mono">${state.hub.agent_hash}</span></span>
+            <span>agent <span class="mono">${
+                state.orchestrator.agent_hash}</span></span>
         </footer>`;
 }
 

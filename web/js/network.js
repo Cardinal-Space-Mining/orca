@@ -12,7 +12,7 @@ import { trafficStore } from './traffic.js';
 const SOURCE_STYLE = {
     interface: { label: 'Radio link', color: '#3987e5',
         help: 'byte counters of the robot\'s link interface: everything on '
-            + 'the link, overhead and the hub included' },
+            + 'the link, overhead and the orchestrator included' },
     net_adapter: { label: 'net_adapter', color: '#d95926',
         help: 'payload net_adapter reports, per topic, without protocol '
             + 'overhead' },
@@ -72,16 +72,16 @@ function useWidth(reference) {
 
 function CompetitionPanel({ state }) {
     const isOn = state.settings.competition_mode;
-    const hubKbps = state.machines.reduce((total, entry) =>
+    const orchestratorKbps = state.machines.reduce((total, entry) =>
         total + (entry.machine.is_local ? 0
-            : entry.connection.hub_kbps || 0), 0);
+            : entry.connection.orchestrator_kbps || 0), 0);
     return html`
         <section class="panel competition ${isOn ? 'on' : ''}">
             <div class="run-head">
                 <div>
                     <h2>Competition mode</h2>
-                    <p class="muted">Keeps the hub's own traffic on the robot's
-                        link small: status every 10 s instead of 2 s, and
+                    <p class="muted">Keeps the orchestrator's own traffic on
+                        the robot's link small: status every 10 s instead of 2 s, and
                         output from other machines' processes only on request
                         (errors still show when you open a run).</p>
                 </div>
@@ -92,9 +92,9 @@ function CompetitionPanel({ state }) {
                     <span></span>${isOn ? 'On' : 'Off'}
                 </label>
             </div>
-            <div class="muted">Hub traffic to other machines right now:
-                <b>${' ' + formatKbps(hubKbps)}</b> (payload; SSH adds a few
-                percent)</div>
+            <div class="muted">Orchestrator traffic to other machines right now:
+                <b>${' ' + formatKbps(orchestratorKbps)}</b> (payload; SSH
+                adds a few percent)</div>
         </section>`;
 }
 
@@ -488,11 +488,12 @@ function TrafficPanel({ state }) {
         <section class="panel">
             <h2>Traffic</h2>
             <p class="muted">Every interface on every machine, from its byte
-                counters (everything, not just robot code). Hub column: the
-                hub's own traffic with that machine.</p>
+                counters (everything, not just robot code). Orchestrator
+                column: the orchestrator's own traffic with that machine.</p>
             <table class="table">
                 <thead><tr><th>Machine</th><th>Interface</th><th>Address</th>
-                    <th>Down</th><th>Up</th><th>Last 3 min</th><th>Hub</th>
+                    <th>Down</th><th>Up</th><th>Last 3 min</th>
+                    <th>Orchestrator</th>
                 </tr></thead>
                 <tbody>${rows.map(({ entry, iface }, index) => html`
                     <tr key=${`${entry.machine.id}/${iface.name}`}>
@@ -508,7 +509,8 @@ function TrafficPanel({ state }) {
                         <td class="muted">${index === 0
                             || rows[index - 1].entry !== entry
                             ? (entry.machine.is_local ? '–'
-                                : formatKbps(entry.connection.hub_kbps)) : ''}
+                                : formatKbps(entry.connection
+                                    .orchestrator_kbps)) : ''}
                             </td>
                     </tr>`)}</tbody>
             </table>

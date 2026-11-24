@@ -1,5 +1,6 @@
 '''
-Hub settings that persist between runs, in ~/.config/csm-hub/settings.json.
+Orchestrator settings that persist between runs, in
+~/.config/orchestrator/settings.json.
 '''
 
 from __future__ import annotations
@@ -9,11 +10,11 @@ import json
 import os
 
 
-SETTINGS_PATH = os.path.expanduser('~/.config/csm-hub/settings.json')
+SETTINGS_PATH = os.path.expanduser('~/.config/orchestrator/settings.json')
 
 DEFAULTS = {
-    # Less hub traffic on the robot's link: slower status, no live output
-    # from other machines (see docs on the Network page).
+    # Less orchestrator traffic on the robot's link: slower status, no live
+    # output from other machines (see docs on the Network page).
     'competition_mode': False,
     'budget': {
         # Lunabotics guidebook 14.1.19: average comm-link use <= 4,000 Kbps;

@@ -1,5 +1,6 @@
-// Live hub state over one Server-Sent Events stream: a "snapshot" when the
-// stream opens, then "machine", "run", "run.removed" and "output" events.
+// Live orchestrator state over one Server-Sent Events stream: a "snapshot"
+// when the stream opens, then "machine", "run", "run.removed" and "output"
+// events.
 //
 // Process output is kept outside Preact state, in `outputStore`, so a busy
 // process doesn't re-render the whole page: only consoles showing that
@@ -102,7 +103,7 @@ export function useProcessOutput(machineId, processId) {
 }
 
 
-// --- Hub state ---------------------------------------------------------------
+// --- Orchestrator state ------------------------------------------------------
 
 function replaceMachine(previous, machine) {
     if (!previous) return previous;
@@ -138,7 +139,7 @@ function mergeBudget(previous, update) {
     return { ...update, history };
 }
 
-export function useHubState() {
+export function useOrchestratorState() {
     const [state, setState] = useState(null);
     const [isLive, setIsLive] = useState(false);
 

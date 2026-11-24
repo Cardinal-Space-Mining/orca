@@ -1,13 +1,14 @@
-// The logs page: log files on each machine (hub runs, the latest build, ROS
-// logs, the agent, the VM's autostart log), viewed with the same filters as
-// live output.
+// The logs page: log files on each machine (orchestrator runs, the latest
+// build, ROS logs, the agent, the VM's autostart log), viewed with the same
+// filters as live output.
 
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { html, formatAgo, formatBytes, getJson, StatusDot } from './common.js';
 import { LineView } from './console.js';
 
 
-const GROUP_ORDER = ['Hub runs', 'Latest build', 'ROS', 'Agent', 'VM'];
+const GROUP_ORDER = [
+    'Orchestrator runs', 'Latest build', 'ROS', 'Agent', 'VM'];
 const READ_BYTES = 2 * 1024 * 1024;
 
 function logUrl(machineId, path, extra = '') {

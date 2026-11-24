@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 '''
-net_adapter's own traffic and latency, for the hub's bandwidth budget.
+net_adapter's own traffic and latency, for the orchestrator's bandwidth budget.
 
-The hub copies this file to ~/.csm-hub/ and runs it (with ROS and the
-workspace sourced, and the same DDS settings as `run.sh --local`) on a
+The orchestrator copies this file to ~/.orchestrator/ and runs it (with ROS and
+the workspace sourced, and the same DDS settings as `run.sh --local`) on a
 machine that runs a net_adapter endpoint. It prints one line per message,
-"CSMHUB <json>", which the hub picks out of the process's output.
+"ORCHESTRATOR <json>", which the orchestrator picks out of the process's
+output.
 '''
 
 import json
@@ -18,7 +19,7 @@ from std_msgs.msg import Int32
 from net_adapter.msg import NetBandwidth
 
 
-PREFIX = 'CSMHUB '
+PREFIX = 'ORCHESTRATOR '
 # net_adapter publishes these best-effort; a reliable subscription would be
 # incompatible and get nothing.
 QOS = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
@@ -27,7 +28,7 @@ QOS = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 class Monitor(Node):
 
     def __init__(self):
-        super().__init__('csm_hub_monitor')
+        super().__init__('orchestrator_monitor')
         for side in ('robot', 'client'):
             self.create_subscription(
                 NetBandwidth, '/lance/net_bandwidth/' + side,

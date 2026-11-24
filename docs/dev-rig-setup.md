@@ -1,19 +1,19 @@
 # Development test rig setup
 
-How the M2 mac mini and its Ubuntu VM were prepared so csm-hub (and Claude
-Code) can drive them from the development machine. Repeat these steps when
-setting up a new dev machine or a new test rig. **None of this is for the
-robot**: the robot gets narrower permissions from the hub's installer.
+How the M2 mac mini and its Ubuntu VM were prepared so the orchestrator (and
+Claude Code) can drive them from the development machine. Repeat these steps
+when setting up a new dev machine or a new test rig. **None of this is for the
+robot**: the robot gets narrower permissions from the orchestrator's installer.
 
 | Machine | Address | Notes |
 |---|---|---|
-| Dev machine (Linux) | 10.180.0.40 | Runs the hub. |
+| Dev machine (Linux) | 10.180.0.40 | Runs the orchestrator. |
 | M2 mac mini | `sams-mac-mini.local` (10.180.0.39) | csm-vm at `~/code/csm-vm`. Host-only link to the VM: 192.168.18.1 |
 | VM (Ubuntu 26.04) | 10.180.0.82 (bridged NIC); 192.168.18.2 (host-only link) | lance-ws at `~/lance-ws` |
 
 ## 1. SSH key on the dev machine
 
-The hub only uses key authentication (it never types passwords).
+The orchestrator only uses key authentication (it never types passwords).
 
 ```bash
 ssh-keygen -t ed25519            # no passphrase, or keep it loaded in ssh-agent
@@ -23,9 +23,9 @@ ssh-copy-id samri@10.180.0.82
 
 ## 2. SSH aliases on the dev machine
 
-Append to `~/.ssh/config`. The hub doesn't need these (it builds its own SSH
-options from the machine inventory); they're for manual use and for Claude
-Code's permission rules, which match on the start of a command.
+Append to `~/.ssh/config`. The orchestrator doesn't need these (it builds its
+own SSH options from the machine inventory); they're for manual use and for
+Claude Code's permission rules, which match on the start of a command.
 
 ```
 Host m2-mac
@@ -68,14 +68,14 @@ rule with `visudo` before installing it, so a typo can't break sudo.
 
 ```bash
 # mac
-ssh -t sams-mac-mini.local 'echo "samri ALL=(ALL) NOPASSWD: ALL" > /tmp/csm-hub-dev && sudo visudo -cf /tmp/csm-hub-dev && sudo install -m 440 -o root -g wheel /tmp/csm-hub-dev /etc/sudoers.d/90-csm-hub-dev && rm /tmp/csm-hub-dev'
+ssh -t sams-mac-mini.local 'echo "samri ALL=(ALL) NOPASSWD: ALL" > /tmp/orchestrator-dev && sudo visudo -cf /tmp/orchestrator-dev && sudo install -m 440 -o root -g wheel /tmp/orchestrator-dev /etc/sudoers.d/90-orchestrator-dev && rm /tmp/orchestrator-dev'
 
 # VM
-ssh -t samri@10.180.0.82 'echo "samri ALL=(ALL) NOPASSWD: ALL" > /tmp/csm-hub-dev && sudo visudo -cf /tmp/csm-hub-dev && sudo install -m 440 -o root -g root /tmp/csm-hub-dev /etc/sudoers.d/90-csm-hub-dev && rm /tmp/csm-hub-dev'
+ssh -t samri@10.180.0.82 'echo "samri ALL=(ALL) NOPASSWD: ALL" > /tmp/orchestrator-dev && sudo visudo -cf /tmp/orchestrator-dev && sudo install -m 440 -o root -g root /tmp/orchestrator-dev /etc/sudoers.d/90-orchestrator-dev && rm /tmp/orchestrator-dev'
 ```
 
 Check with `ssh m2-mac sudo -n true && ssh m2-vm sudo -n true`. Undo with
-`sudo rm /etc/sudoers.d/90-csm-hub-dev` on each machine.
+`sudo rm /etc/sudoers.d/90-orchestrator-dev` on each machine.
 
 ## 4. User lingering on the VM
 

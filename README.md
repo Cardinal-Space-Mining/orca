@@ -1,17 +1,17 @@
-# CSM Hub
+# Orchestrator
 
 One place to run the robot: which machines are up and what code they have,
 launching across several machines at once with live output, deploying and
-building code, pulling bags, reading logs, and browsing the launch config. A web app served by a small Python program on your laptop; it
-talks to each machine through SSH, so nothing on the robot listens on the
-network.
+building code, pulling bags, reading logs, and browsing the launch config.
+A web app served by a small Python program on your laptop; it talks to each
+machine through SSH, so nothing on the robot listens on the network.
 
 ```bash
-./src/csm-hub/csm-hub          # from the workspace root; opens a browser tab
+./src/orchestrator/orchestrator          # from the workspace root; opens a browser tab
 ```
 
 Options: `--port 8740`, `--no-browser`, `--bind 127.0.0.1`,
-`--workspace <path>` (default: the workspace containing csm-hub).
+`--workspace <path>` (default: the workspace containing the orchestrator).
 
 **Requirements:** Python 3.9+ (no packages to install) and SSH key access to
 each machine (`ssh-copy-id user@host`). Each managed machine needs `python3`
@@ -25,19 +25,19 @@ CAN permissions): [docs/machine-setup.md](docs/machine-setup.md).
 | Runs | Everything launched, deployed or pulled, with live output per process (filter by text, level or node), stop all or one. |
 | Deploy | Push this workspace's `src/` to other machines and build there; compare first to see exactly what changes. |
 | Bags | Recordings on each machine with length, size and topics; pull them here, delete them there once pulled. |
-| Logs | Hub run logs, each package's latest build log, ROS logs, the agent's and the VM autostart log, per machine. |
+| Logs | Orchestrator run logs, each package's latest build log, ROS logs, the agent's and the VM autostart log, per machine. |
 | Network | The comm-link bandwidth budget (average against the guidebook's 4,000 kbps, per source and per topic), competition mode, live traffic on every interface, Wi-Fi channels, and ping / port check / network scan from any machine. |
 | Config | Browse every action and preset of `lance/config`, what a preset inherits and enables, and try `key:=value` arguments without launching. |
 
 ## Machines
 
-The hub reads two inventory files and merges them (the second overrides
+The orchestrator reads two inventory files and merges them (the second overrides
 entries of the first by `id`):
 
 | File | For |
 |---|---|
-| `<workspace>/src/project/hub/machines.json` | The team's machines: robot, driver stations. Versioned with the code. |
-| `~/.config/csm-hub/machines.json` | Your own machines, e.g. a test rig. |
+| `<workspace>/src/project/orchestrator/machines.json` | The team's machines: robot, driver stations. Versioned with the code. |
+| `~/.config/orchestrator/machines.json` | Your own machines, e.g. a test rig. |
 
 Your own machine is always included as `local`. Example entry pair for a mac
 host and its VM:
@@ -74,16 +74,16 @@ host and its VM:
   second address of a machine doesn't trigger "unknown host".
 - **Prefer IP addresses over `.local` names** for machines with both Wi-Fi and
   Ethernet: mDNS may resolve to the Wi-Fi address (see FINDINGS.md, M6).
-- `workspace` is a colcon workspace whose repo is `<workspace>/src`; the hub
-  shows its commit and whether it matches yours.
+- `workspace` is a colcon workspace whose repo is `<workspace>/src`; the
+  orchestrator shows its commit and whether it matches yours.
 - `vm` marks a mac that runs a csm-vm VM.
 
 ## Scenarios
 
 A scenario is a named setup that starts processes on one or more machines: one
-JSON file per scenario in `<workspace>/src/project/hub/scenarios/`. The format
-is documented at the top of [hub/scenarios.py](hub/scenarios.py); the
-competition one, shortened:
+JSON file per scenario in `<workspace>/src/project/orchestrator/scenarios/`. The
+format is documented at the top of [backend/scenarios.py](backend/scenarios.py);
+the competition one, shortened:
 
 ```json
 {
@@ -113,24 +113,24 @@ competition one, shortened:
 - `lance` processes run `./src/run.sh <flags> <key:=value...>` in the
   machine's workspace; `command` processes run a shell command.
 - `{ip:client}` is the client machine's address as seen from the machine the
-  process runs on: the hub picks one on a network both share (default-route
-  interface first, Ethernet before Wi-Fi) and the launch page lets you pick
-  another.
+  process runs on: the orchestrator picks one on a network both share
+  (default-route interface first, Ethernet before Wi-Fi) and the launch page
+  lets you pick another.
 - **`set` changes single values** of whatever presets the arguments select,
-  which the command line can't do. The hub writes a small overlay next to
-  `launch.json` in the machine's `install/` tree (never `src/`), deriving a
-  `hub_<key>` preset from the one that would have been chosen, and adds
-  `json_path:=<overlay> redux:=hub_<key>` to the command. The launch page
-  shows the overlay and the resulting presets before anything starts. No
+  which the command line can't do. The orchestrator writes a small overlay next
+  to `launch.json` in the machine's `install/` tree (never `src/`), deriving a
+  `orchestrator_<key>` preset from the one that would have been chosen, and adds
+  `json_path:=<overlay> redux:=orchestrator_<key>` to the command. The launch
+  page shows the overlay and the resulting presets before anything starts. No
   presets need to be added for a new pairing of machines.
 - Processes start in `after` order; if one fails to start, the ones already
   started are stopped again. Stopping sends SIGINT to the whole process group
   (like Ctrl-C), then SIGTERM after 20 s and SIGKILL after 5 more, robot side
   last.
-- Runs survive the hub: processes belong to the machine's agent, and a
-  restarted hub finds them again with their output. Each process's output is
-  also saved on its machine under `~/.csm-hub/runs/<run>/` (20 MB cap per
-  process, removed after 14 days).
+- Runs survive the orchestrator: processes belong to the machine's agent, and a
+  restarted orchestrator finds them again with their output. Each process's
+  output is also saved on its machine under `~/.orchestrator/runs/<run>/` (20 MB
+  cap per process, removed after 14 days).
 
 ## Deploying
 
@@ -141,9 +141,9 @@ it over SSH):
   its workspace: the commit, uncommitted changes and the contents of
   untracked files, in the repo and every submodule. Machines with the same
   fingerprint run the same code whatever their git history. The Machines page
-  shows *same code as hub* / *different code*, and the launch page warns when
-  the robot and the driver station differ (net_adapter's codec needs both
-  sides deployed together).
+  shows *same code as orchestrator* / *different code*, and the launch page
+  warns when the robot and the driver station differ (net_adapter's codec needs
+  both sides deployed together).
 - **Compare** shows what a push would change (an rsync dry run): files
   changed, new and deleted, and any work on the target a push would
   overwrite (uncommitted changes there).
@@ -183,16 +183,16 @@ offered once an identical copy is here.
   average* (do it as a run starts):
   - **Radio link**: the byte counters of the robot's link interface (pick the
     robot computer's Wi-Fi adapter). Everything on the link: net_adapter,
-    TCP/IP and zenoh overhead, the hub, anything else.
+    TCP/IP and zenoh overhead, the orchestrator, anything else.
   - **net_adapter**: what the endpoints report on `/lance/net_bandwidth/*`,
     with a per-topic breakdown and the link latency. Needs the *monitor*: a
-    small rclpy script the hub runs on a machine with a net_adapter endpoint
-    (normally the driver station), with the same DDS settings as
+    small rclpy script the orchestrator runs on a machine with a net_adapter
+    endpoint (normally the driver station), with the same DDS settings as
     `run.sh --local`.
-- **Competition mode** keeps the hub's own traffic small: status every 10 s,
-  no live output from other machines (each console has *Fetch output now*),
-  slower background checks. Measured on the test rig: about 0.5 kbps to the
-  robot VM, against 5.5 kbps normally. The top bar shows it, with the
+- **Competition mode** keeps the orchestrator's own traffic small: status every
+  10 s, no live output from other machines (each console has *Fetch output
+  now*), slower background checks. Measured on the test rig: about 0.5 kbps to
+  the robot VM, against 5.5 kbps normally. The top bar shows it, with the
   running average.
 - **Tools** run from any machine (what it can reach is what the robot code on
   it can reach): ping, TCP port check (SSH, zenoh 7447, lidar 2111,
@@ -204,23 +204,23 @@ offered once an identical copy is here.
 ```
  your laptop                           robot mac mini
  ┌──────────────────────┐   ssh   ┌──────────────────────────────┐
- │ hub (python) ── web  │────────▶│ agent (macOS): VM, stats     │
+ │ orchestrator ── web  │────────▶│ agent (macOS): VM, stats     │
  │ agent (local)        │   ssh   │  ┌────────────────────────┐  │
  └──────────────────────┘─────────┼─▶│ agent (VM): workspace  │  │
                                   │  └────────────────────────┘  │
                                   └──────────────────────────────┘
 ```
 
-- **Agent** (`agent/csm_agent.py`): one standard-library file. The hub copies
-  it to `~/.csm-hub/agent.py` on each machine (and replaces it when it
-  changes), then runs `agent.py attach` over SSH. `attach` connects to a
-  long-running daemon on a unix socket, starting it if needed, so processes
-  the hub starts can outlive the hub's connection. Logs:
-  `~/.csm-hub/agent.log`.
-- **Hub** (`hub/`): one link per machine (tries routes, installs or updates
-  the agent, polls status, reconnects), plus a small HTTP server that streams
-  state to the browser with Server-Sent Events.
-- **Config** (`hub/lance_config.py`): reads `lance/config` with
+- **Agent** (`agent/orchestrator_agent.py`): one standard-library file. The
+  orchestrator copies it to `~/.orchestrator/agent.py` on each machine (and
+  replaces it when it changes), then runs `agent.py attach` over SSH. `attach`
+  connects to a long-running daemon on a unix socket, starting it if needed, so
+  processes the orchestrator starts can outlive the orchestrator's connection.
+  Logs: `~/.orchestrator/agent.log`.
+- **Orchestrator** (`backend/`): one link per machine (tries routes, installs or
+  updates the agent, polls status, reconnects), plus a small HTTP server that
+  streams state to the browser with Server-Sent Events.
+- **Config** (`backend/lance_config.py`): reads `lance/config` with
   launch-utils' own preprocessing code from your workspace, so previews match
   what `run.sh` does.
 - **Web app** (`web/`): Preact + htm loaded as plain ES modules from
@@ -236,7 +236,7 @@ offered once an identical copy is here.
 | 2 | Deploy (compare, push, remote build, code fingerprints), bags, logs | done |
 | 3 | VM control, terminals and serial console; editing the inventory in the app | done |
 | 4 | Network tools, bandwidth budget, competition mode; resizable, dockable terminals | done |
-| 5 | Configurability: edit scenarios, launch-config presets (with descriptions) and hub settings in the app | next |
+| 5 | Configurability: edit scenarios, launch-config presets (with descriptions) and orchestrator settings in the app | next |
 | 6 | Native macOS processes | |
 
 Bugs and inconsistencies found along the way, in this and other repos, are

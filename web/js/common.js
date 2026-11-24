@@ -1,5 +1,5 @@
 // Shared helpers: the htm binding, formatting, small components and the
-// hub API.
+// orchestrator API.
 
 import { h } from 'preact';
 import htm from 'htm';
@@ -59,7 +59,7 @@ export function levelFor(percent, warnAt, badAt) {
 }
 
 
-// --- Hub API -----------------------------------------------------------------
+// --- Orchestrator API --------------------------------------------------------
 
 async function readResponse(response) {
     const body = await response.json().catch(() => ({}));

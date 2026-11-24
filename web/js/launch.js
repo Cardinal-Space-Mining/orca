@@ -254,8 +254,9 @@ export function LaunchView({ state, onLaunched }) {
     return html`
         <div class="page-head"><div>
             <h1>Launch</h1>
-            <p>Scenarios from <span class="mono">src/project/hub/scenarios
-                </span>: one launch can start processes on several machines.</p>
+            <p>Scenarios from <span class="mono">
+                src/project/orchestrator/scenarios</span>: one launch can start
+                processes on several machines.</p>
         </div></div>
         ${catalog.errors.map((entry) => html`<div class="error-banner">
             <span class="mono">${entry.path}</span>: ${entry.error}</div>`)}

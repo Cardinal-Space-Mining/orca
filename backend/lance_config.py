@@ -1,26 +1,27 @@
 '''
 The LANCE launch configuration (lance/config), read with launch-utils' own
-code so the hub resolves presets exactly the way `run.sh` will.
+code so the orchestrator resolves presets exactly the way `run.sh` will.
 
 launch-utils' common.py imports ROS (ament_index_python) and netifaces at
-module level (FINDINGS.md L4). The hub only needs its JSON loading, so when
-those modules aren't installed it loads common.py against small stand-ins.
+module level (FINDINGS.md L4). The orchestrator only needs its JSON loading, so
+when those modules aren't installed it loads common.py against small stand-ins.
 
 Overrides the CLI can't express (a single value, such as the peer's IP
-address) go through an overlay file that the hub writes next to launch.json
-in the target's install directory:
+address) go through an overlay file that the orchestrator writes next to
+launch.json in the target's install directory:
 
     {
         "pragma:enable_preproc": true,
         "pragma:import": ["launch.json"],
         "redux": {
-            "hub_robot": {"pragma:derived": "robot", "client_hostname": "..."}
+            "orchestrator_robot": {"pragma:derived": "robot",
+                                   "client_hostname": "..."}
         }
     }
 
-and the launch gets `json_path:=<overlay> redux:=hub_robot`. launch-utils
-merges imported files under the overlay's own keys, so the new preset
-inherits everything else from the preset that would have been chosen.
+and the launch gets `json_path:=<overlay> redux:=orchestrator_robot`.
+launch-utils merges imported files under the overlay's own keys, so the new
+preset inherits everything else from the preset that would have been chosen.
 '''
 
 from __future__ import annotations
@@ -74,7 +75,8 @@ def installStandIns():
         packages = types.ModuleType('ament_index_python.packages')
 
         def getPackageShareDirectory(package):
-            raise LookupError('ROS is not available to the hub: ' + package)
+            raise LookupError('ROS is not available to the orchestrator: '
+                              + package)
 
         packages.get_package_share_directory = getPackageShareDirectory
         ament.packages = packages
@@ -102,10 +104,11 @@ class LaunchUtils:
             raise ConfigError('launch-utils not found at ' + directory)
         installStandIns()
         self.preprocess = loadModule(
-            'csm_hub_launch_utils_preprocess',
+            'orchestrator_launch_utils_preprocess',
             os.path.join(directory, 'preprocess.py'))
         self.common = loadModule(
-            'csm_hub_launch_utils_common', os.path.join(directory, 'common.py'))
+            'orchestrator_launch_utils_common',
+            os.path.join(directory, 'common.py'))
 
 
 
@@ -224,7 +227,7 @@ class LanceConfig:
                 raise ConfigError(
                     "can't set %s values: these presets don't enable the "
                     "'%s' action" % (action, action))
-            derived_name = 'hub_' + tag
+            derived_name = 'orchestrator_' + tag
             preset = {DERIVED_TAG: parent}
             preset.update(values)
             overlay[action] = {derived_name: preset}

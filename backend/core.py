@@ -1,6 +1,6 @@
 '''
-The hub: owns one MachineLink per machine, the runs it has started, and fans
-every update out to the browser windows that are listening.
+The orchestrator: owns one MachineLink per machine, the runs it has started,
+and fans every update out to the browser windows that are listening.
 '''
 
 from __future__ import annotations
@@ -23,14 +23,16 @@ from .scenarios import loadScenarios
 from .vm import VmController
 
 
-HUB_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-AGENT_SOURCE_PATH = os.path.join(HUB_ROOT, 'agent', 'csm_agent.py')
-MONITOR_SOURCE_PATH = os.path.join(HUB_ROOT, 'hub', 'ros_monitor.py')
+ORCHESTRATOR_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+AGENT_SOURCE_PATH = os.path.join(ORCHESTRATOR_ROOT, 'agent',
+                                 'orchestrator_agent.py')
+MONITOR_SOURCE_PATH = os.path.join(ORCHESTRATOR_ROOT, 'backend',
+                                   'ros_monitor.py')
 SUBSCRIBER_QUEUE_SIZE = 5000
 MAX_FINISHED_RUNS = 20
 
 
-class Hub:
+class Orchestrator:
 
     def __init__(self, machines: list, workspace_root: Optional[str],
                  inventory_paths: list):
@@ -69,13 +71,14 @@ class Hub:
         return self.links_by_id[machine_id].jumpRoute()
 
     def referenceHead(self) -> Optional[str]:
-        '''Commit of the hub's own workspace (what previews are based on).'''
+        '''Commit of the orchestrator's own workspace (what previews are based
+        on).'''
         local = self.links_by_id.get('local')
         workspace = local.state['workspace'] if local else None
         return workspace.get('head') if workspace else None
 
     def referenceFingerprint(self) -> Optional[str]:
-        '''Code fingerprint of the hub's own workspace.'''
+        '''Code fingerprint of the orchestrator's own workspace.'''
         local = self.links_by_id.get('local')
         workspace = local.state['workspace'] if local else None
         return workspace.get('fingerprint') if workspace else None
@@ -118,7 +121,7 @@ class Hub:
 
     def snapshot(self) -> dict:
         return {
-            'hub': {
+            'orchestrator': {
                 'hostname': socket.gethostname(),
                 'workspace': self.workspace_root,
                 'inventory_paths': [
@@ -214,7 +217,7 @@ class Hub:
         with open(MONITOR_SOURCE_PATH) as file:
             source = file.read()
         script = await link.call('file.write', {
-            'path': '~/.csm-hub/ros_monitor.py', 'content': source})
+            'path': '~/.orchestrator/ros_monitor.py', 'content': source})
         command = ('source /opt/ros/%s/setup.bash && source %s/install/'
                    'setup.bash && ' % (distro, root))
         if self.settings['budget']['monitor_local_dds']:
@@ -324,7 +327,7 @@ class Hub:
 
     def onProcessState(self, machine_id: str, record: dict):
         '''Route an agent's process update to its run, recreating runs the
-        hub doesn't know (it restarted while they were running).'''
+        orchestrator doesn't know (it restarted while they were running).'''
         if record['process_id'] == MONITOR_PROCESS_ID:
             self.onMonitorState(machine_id, record)
             return
@@ -362,7 +365,7 @@ class Hub:
     async def processOutput(self, machine_id: str, process_id: str,
                             from_line: int, refresh: bool = False) -> dict:
         '''Buffered output. With refresh, first fetch what the agent has that
-        the hub didn't stream (competition mode pauses streaming).'''
+        the orchestrator didn't stream (competition mode pauses streaming).'''
         link = self.link(machine_id)
         mirror = link.processes.get(process_id)
         if mirror is None:

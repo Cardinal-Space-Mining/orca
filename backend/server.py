@@ -1,5 +1,5 @@
 '''
-Small HTTP server for the hub's web interface (standard library only).
+Small HTTP server for the orchestrator's web interface (standard library only).
 
     GET  /                                  the app
     GET  /static/<path>                     files under web/
@@ -27,8 +27,8 @@ Small HTTP server for the hub's web interface (standard library only).
                                             backup, restore (a run)
     POST /api/machines/<id>/terminals       {"kind": "shell"|"serial"}
     POST /api/machines/<id>/terminals/<t>/input|resize|close
-    GET  /api/settings, POST /api/settings  hub settings (competition mode,
-                                            budget sources)
+    GET  /api/settings, POST /api/settings  orchestrator settings (competition
+                                            mode, budget sources)
     GET  /api/budget                        bandwidth budget with history
     POST /api/budget/reset                  start a new averaging window
     POST /api/budget/monitor                {"machine_id"} start / {} stop the
@@ -41,8 +41,8 @@ Small HTTP server for the hub's web interface (standard library only).
     POST /api/config/resolve                {"arguments": {key: value}}
 
 Every response except the event stream closes its connection, which keeps the
-parser trivial. The server binds to localhost by default: the hub is meant to
-be used on the machine it runs on.
+parser trivial. The server binds to localhost by default: the orchestrator is
+meant to be used on the machine it runs on.
 '''
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ import os
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from .core import HUB_ROOT, Hub
+from .core import ORCHESTRATOR_ROOT, Orchestrator
 from .inventory import InventoryError
 from .lance_config import ConfigError
 from .link import AgentError
@@ -62,7 +62,7 @@ from .runs import PlanError
 from .scenarios import ScenarioError
 
 
-WEB_ROOT = os.path.join(HUB_ROOT, 'web')
+WEB_ROOT = os.path.join(ORCHESTRATOR_ROOT, 'web')
 MAX_HEADER_LINES = 100
 MAX_BODY_BYTES = 1024 * 1024
 KEEPALIVE_PERIOD_S = 15.0
@@ -154,8 +154,8 @@ def writeError(writer, status: int, message: str):
 
 class HttpServer:
 
-    def __init__(self, hub: Hub):
-        self.hub = hub
+    def __init__(self, orchestrator: Orchestrator):
+        self.orchestrator = orchestrator
 
     async def start(self, host: str, port: int):
         '''"localhost" listens on both loopback addresses: browsers often try
@@ -216,64 +216,64 @@ class HttpServer:
     async def answerApi(self, request: Request, parts: list):
         """The JSON answer for an API request, or None if there's no such
         endpoint."""
-        hub = self.hub
+        orchestrator = self.orchestrator
         method = request.method
         if method == 'GET' and parts == ['state']:
-            return hub.snapshot()
+            return orchestrator.snapshot()
         if parts[:1] == ['machines'] and len(parts) >= 3:
             return await self.answerMachine(request, parts[1], parts[2:])
         if method == 'GET' and parts == ['scenarios']:
-            scenarios, errors = hub.scenarios()
+            scenarios, errors = orchestrator.scenarios()
             return {'scenarios': scenarios, 'errors': errors}
         if method == 'POST' and parts == ['plan']:
-            return hub.plan(request.json())
+            return orchestrator.plan(request.json())
         if method == 'POST' and parts == ['runs']:
-            return hub.launch(request.json())
+            return orchestrator.launch(request.json())
         if method == 'POST' and len(parts) == 3 and parts[0] == 'runs':
             if parts[2] == 'stop':
-                await hub.stopRun(parts[1])
+                await orchestrator.stopRun(parts[1])
                 return {'ok': True}
             if parts[2] == 'dismiss':
-                hub.dismissRun(parts[1])
+                orchestrator.dismissRun(parts[1])
                 return {'ok': True}
         if parts[:1] == ['config']:
             return self.answerConfig(request, parts[1:])
         if method == 'GET' and parts == ['settings']:
-            return hub.settings
+            return orchestrator.settings
         if method == 'POST' and parts == ['settings']:
-            return await hub.updateSettings(request.json())
+            return await orchestrator.updateSettings(request.json())
         if method == 'GET' and parts == ['budget']:
-            return hub.budget.snapshot(with_history=True)
+            return orchestrator.budget.snapshot(with_history=True)
         if method == 'POST' and parts == ['budget', 'reset']:
-            hub.budget.reset()
+            orchestrator.budget.reset()
             return {'ok': True}
         if method == 'POST' and parts == ['budget', 'monitor']:
             body = request.json()
             if body.get('machine_id'):
-                return await hub.startMonitor(body['machine_id'])
-            return await hub.stopMonitor()
+                return await orchestrator.startMonitor(body['machine_id'])
+            return await orchestrator.stopMonitor()
         if method == 'GET' and parts == ['inventory']:
-            return hub.inventory()
+            return orchestrator.inventory()
         if method == 'POST' and len(parts) == 2 and parts[0] == 'inventory':
-            return await hub.saveInventory(parts[1],
-                                           request.json()['machines'])
+            return await orchestrator.saveInventory(
+                parts[1], request.json()['machines'])
         if method == 'POST' and parts == ['deploy', 'compare']:
             body = request.json()
-            return await hub.deployer.compare(body['machine_id'],
-                                              body.get('delete', True))
+            return await orchestrator.deployer.compare(
+                body['machine_id'], body.get('delete', True))
         if method == 'POST' and parts == ['deploy']:
-            return hub.deployer.deploy(request.json()).snapshot()
+            return orchestrator.deployer.deploy(request.json()).snapshot()
         return None
 
     async def answerMachine(self, request: Request, machine_id: str,
                             parts: list):
-        hub = self.hub
+        orchestrator = self.orchestrator
         method = request.method
         if method == 'POST' and parts == ['reconnect']:
-            hub.reconnect(machine_id)
+            orchestrator.reconnect(machine_id)
             return {'ok': True}
         if parts == ['host-key']:
-            link = hub.link(machine_id)
+            link = orchestrator.link(machine_id)
             if method == 'GET':
                 return await link.scanHostKey()
             await link.trustHostKey(request.json()['fingerprints'])
@@ -282,37 +282,38 @@ class HttpServer:
             return await self.answerNetTool(machine_id, parts[1],
                                             request.json())
         if method == 'POST' and len(parts) == 2 and parts[0] == 'vm':
-            return hub.vm.run(machine_id, parts[1], request.json()).snapshot()
+            return orchestrator.vm.run(machine_id, parts[1],
+                                       request.json()).snapshot()
         if method == 'POST' and parts[:1] == ['terminals']:
             return await self.answerTerminal(request, machine_id, parts[1:])
         if parts[:1] == ['bags']:
             if method == 'GET' and len(parts) == 1:
-                return await hub.deployer.listBags(machine_id)
+                return await orchestrator.deployer.listBags(machine_id)
             if method == 'POST' and parts[1:] == ['pull']:
-                return hub.deployer.pullBags(
+                return orchestrator.deployer.pullBags(
                     machine_id, request.json()['names']).snapshot()
             if method == 'POST' and parts[1:] == ['delete']:
-                return await hub.deployer.deleteBag(machine_id,
-                                                    request.json()['name'])
+                return await orchestrator.deployer.deleteBag(
+                    machine_id, request.json()['name'])
         if method == 'GET' and parts == ['logs']:
-            return {'logs': await hub.listLogs(machine_id)}
+            return {'logs': await orchestrator.listLogs(machine_id)}
         if method == 'GET' and parts == ['logs', 'read']:
-            return await hub.readLog(
+            return await orchestrator.readLog(
                 machine_id, request.queryValue('path'),
                 int(request.queryValue('max_bytes', str(1024 * 1024))))
         if len(parts) == 3 and parts[0] == 'processes':
             process_id = parts[1]
             if method == 'GET' and parts[2] == 'output':
-                return await hub.processOutput(
+                return await orchestrator.processOutput(
                     machine_id, process_id, int(request.queryValue('from', '0')),
                     request.queryValue('refresh') == '1')
             if method == 'POST' and parts[2] == 'stop':
-                await hub.stopProcess(machine_id, process_id)
+                await orchestrator.stopProcess(machine_id, process_id)
                 return {'ok': True}
         return None
 
     async def answerNetTool(self, machine_id: str, tool: str, body: dict):
-        link = self.hub.link(machine_id)
+        link = self.orchestrator.link(machine_id)
         if tool == 'ping':
             return await link.call('net.ping', {
                 'host': body['host'], 'count': body.get('count', 4)},
@@ -329,10 +330,10 @@ class HttpServer:
 
     async def answerTerminal(self, request: Request, machine_id: str,
                              parts: list):
-        hub = self.hub
+        orchestrator = self.orchestrator
         body = request.json()
         if parts == []:
-            return await hub.openTerminal(
+            return await orchestrator.openTerminal(
                 machine_id, body.get('kind', 'shell'),
                 int(body.get('cols', 100)), int(body.get('rows', 30)))
         if len(parts) != 2:
@@ -347,12 +348,13 @@ class HttpServer:
             params = {'terminal_id': terminal_id}
         else:
             return None
-        await hub.terminalCall(machine_id, 'terminal.' + action, params)
+        await orchestrator.terminalCall(machine_id, 'terminal.' + action,
+                                        params)
         return {'ok': True}
 
     async def downloadLog(self, request: Request, machine_id: str, writer):
-        log = await self.hub.readLog(machine_id, request.queryValue('path'),
-                                     20 * 1024 * 1024)
+        log = await self.orchestrator.readLog(
+            machine_id, request.queryValue('path'), 20 * 1024 * 1024)
         name = '%s-%s' % (machine_id, os.path.basename(log['path']))
         name = ''.join(character if character.isalnum() or character in '._-'
                        else '_' for character in name)
@@ -362,10 +364,10 @@ class HttpServer:
                       % name)
 
     def answerConfig(self, request: Request, parts: list):
-        config = self.hub.lanceConfig()
+        config = self.orchestrator.lanceConfig()
         if config is None:
-            raise ConfigError(self.hub.lance_config_error
-                              or 'the hub has no workspace')
+            raise ConfigError(self.orchestrator.lance_config_error
+                              or 'the orchestrator has no workspace')
         if request.method == 'GET' and parts == []:
             return {'actions': config.actions(),
                     'path': config.config_path}
@@ -396,9 +398,9 @@ class HttpServer:
                      b'Content-Type: text/event-stream\r\n'
                      b'Cache-Control: no-cache\r\n'
                      b'Connection: keep-alive\r\n\r\n')
-        queue = self.hub.subscribe()
+        queue = self.orchestrator.subscribe()
         try:
-            self.writeEvent(writer, 'snapshot', self.hub.snapshot())
+            self.writeEvent(writer, 'snapshot', self.orchestrator.snapshot())
             await writer.drain()
             while True:
                 try:
@@ -409,7 +411,7 @@ class HttpServer:
                     writer.write(b': keepalive\n\n')
                 await writer.drain()
         finally:
-            self.hub.unsubscribe(queue)
+            self.orchestrator.unsubscribe(queue)
 
     @staticmethod
     def writeEvent(writer, event: str, data):

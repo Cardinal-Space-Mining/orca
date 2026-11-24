@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 '''
-csm-hub agent.
+orchestrator agent.
 
-Runs on every machine the hub manages: the robot's mac host, its Ubuntu VM,
-client laptops, and the hub's own machine. It is one file that uses only the
-standard library, so the hub can copy it over SSH and run it with any
-Python 3.9+, including macOS's /usr/bin/python3.
+Runs on every machine the orchestrator manages: the robot's mac host, its
+Ubuntu VM, client laptops, and the orchestrator's own machine. It is one file
+that uses only the standard library, so the orchestrator can copy it over SSH
+and run it with any Python 3.9+, including macOS's /usr/bin/python3.
 
 Modes (first command-line argument):
     daemon   Long-running server. Answers requests on a unix socket and will
-             own the processes the hub starts, so they outlive the hub's
-             connection.
+             own the processes the orchestrator starts, so they outlive the
+             orchestrator's connection.
     attach   Bridges stdin/stdout to the daemon's socket, starting the daemon
-             first if it isn't running. The hub runs this over SSH, so the
-             agent never opens a network port and SSH keys are the only
+             first if it isn't running. The orchestrator runs this over SSH, so
+             the agent never opens a network port and SSH keys are the only
              authentication.
-    hash     Prints the hash of this file (the hub compares it with its copy).
+    hash     Prints the hash of this file (the orchestrator compares it with
+             its copy).
 
 Protocol: one JSON object per line, in both directions.
     request    {"id": 1, "method": "system.stats", "params": {}}
@@ -58,9 +59,9 @@ import time
 PROTOCOL_VERSION = 2
 
 AGENT_PATH = os.path.abspath(__file__)
-# CSM_HUB_AGENT_DIR lets tests run an agent beside the real one.
-AGENT_DIR = os.environ.get('CSM_HUB_AGENT_DIR') \
-    or os.path.join(os.path.expanduser('~'), '.csm-hub')
+# ORCHESTRATOR_AGENT_DIR lets tests run an agent beside the real one.
+AGENT_DIR = os.environ.get('ORCHESTRATOR_AGENT_DIR') \
+    or os.path.join(os.path.expanduser('~'), '.orchestrator')
 SOCKET_PATH = os.path.join(AGENT_DIR, 'agent.sock')
 # Unix socket paths are limited to ~104 bytes, so the daemon and `attach`
 # both work from AGENT_DIR and use this relative name.
@@ -629,7 +630,8 @@ def workspaceStatus(path):
 
 def workspaceRefs(path):
     '''Every branch, tag and remote ref of <path>/src with its commit, so the
-    hub can tell whether a push would lose commits that only exist here.'''
+    orchestrator can tell whether a push would lose commits that only exist
+    here.'''
     repository = os.path.join(os.path.expanduser(path), 'src')
     output = git(repository, 'for-each-ref',
                  '--format=%(objectname) %(refname)') or ''
@@ -642,8 +644,8 @@ def workspaceRefs(path):
     for line in stashes.splitlines():
         sha, _, name = line.partition(' ')
         refs[name] = sha
-    # Refs kept as files survive a push (the hub never deletes inside .git);
-    # refs only in packed-refs don't, since that file gets replaced.
+    # Refs kept as files survive a push (the orchestrator never deletes inside
+    # .git); refs only in packed-refs don't, since that file gets replaced.
     git_directory = git(repository, 'rev-parse', '--absolute-git-dir') or ''
     loose = [name for name in refs if name.startswith('stash@')
              or os.path.exists(os.path.join(git_directory, name))]
@@ -981,7 +983,8 @@ def listLogs(workspace):
         process = os.path.basename(path)[:-len('.log')]
         if process.startswith(run + '.'):
             process = process[len(run) + 1:]
-        entries.append(logEntry(path, 'Hub runs', '%s  %s' % (run, process)))
+        entries.append(logEntry(path, 'Orchestrator runs',
+                                '%s  %s' % (run, process)))
     if workspace:
         entries.extend(buildLogs(workspace))
     ros_logs = glob.glob(os.path.join(ROS_LOG_DIRECTORY, '*.log')) + glob.glob(
@@ -1152,9 +1155,9 @@ def removeOldRunLogs():
 
 
 class SupervisedProcess:
-    '''One process started for the hub. Runs on a pseudo-terminal so programs
-    line-buffer and colour their output as they would in a terminal, in its
-    own process group so stopping it reaches every child (like Ctrl-C).
+    '''One process started for the orchestrator. Runs on a pseudo-terminal so
+    programs line-buffer and colour their output as they would in a terminal,
+    in its own process group so stopping it reaches every child (like Ctrl-C).
 
     The reader and waiter threads hand everything to the event loop through
     call_soon_threadsafe; all state below is owned by the loop thread.'''
@@ -1281,7 +1284,7 @@ class SupervisedProcess:
         self.log_bytes += len(data)
         self.log_file.write(data)
         if self.log_bytes >= MAX_PROCESS_LOG_BYTES:
-            self.log_file.write(b'\n[csm-hub: log size limit reached; '
+            self.log_file.write(b'\n[orchestrator: log size limit reached; '
                                 b'further output is not saved]\n')
         self.log_file.flush()
 
@@ -1342,7 +1345,7 @@ class SupervisedProcess:
             self.stop_task.cancel()
         summary = ('exited with code %d' % return_code if return_code >= 0
                    else 'killed by %s' % self.exit_signal)
-        self.writeLog(('\n[csm-hub: process %s]\n' % summary).encode())
+        self.writeLog(('\n[orchestrator: process %s]\n' % summary).encode())
         self.log_file.close()
         self.manager.broadcastState(self)
 
@@ -1593,7 +1596,7 @@ class TerminalManager:
 
 
 class ClientSession:
-    '''One connected client (normally one hub, through `attach`).'''
+    '''One connected client (normally one orchestrator, through `attach`).'''
 
     def __init__(self, daemon, reader, writer):
         self.daemon = daemon
@@ -1604,7 +1607,8 @@ class ClientSession:
         self.request_tasks = set()
         # Output is only sent to clients that ask for it (see process.watch),
         # so a status-only client costs almost no bandwidth: all processes,
-        # or only some (competition mode watches just the hub's monitor).
+        # or only some (competition mode watches just the orchestrator's
+        # monitor).
         self.watches_output = False
         self.watched_ids = set()
 
@@ -1715,8 +1719,9 @@ class Daemon:
         }
 
     def isIdle(self):
-        '''True when no hub-started processes are running, so the daemon
-        can be restarted (e.g. to update it) without disturbing anything.'''
+        '''True when no orchestrator-started processes are running, so the
+        daemon can be restarted (e.g. to update it) without disturbing
+        anything.'''
         return self.processes.numRunning() == 0
 
     def broadcast(self, event, data, only_watchers=False):
@@ -1773,7 +1778,7 @@ class Daemon:
 
     async def methodProcessStart(self, session, params):
         '''params: process_id, argv, cwd, env, label, meta (returned as is;
-        the hub keeps its run information there).'''
+        the orchestrator keeps its run information there).'''
         return self.processes.start(params)
 
     async def methodProcessStop(self, session, params):

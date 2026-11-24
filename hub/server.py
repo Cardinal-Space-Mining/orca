@@ -27,6 +27,13 @@ Small HTTP server for the hub's web interface (standard library only).
                                             backup, restore (a run)
     POST /api/machines/<id>/terminals       {"kind": "shell"|"serial"}
     POST /api/machines/<id>/terminals/<t>/input|resize|close
+    GET  /api/settings, POST /api/settings  hub settings (competition mode,
+                                            budget sources)
+    GET  /api/budget                        bandwidth budget with history
+    POST /api/budget/reset                  start a new averaging window
+    POST /api/budget/monitor                {"machine_id"} start / {} stop the
+                                            net_adapter monitor
+    POST /api/machines/<id>/net/ping|tcp|scan
     GET  /api/inventory                     both inventory files, as written
     POST /api/inventory/<scope>             {"machines": [...]}: save, apply
     GET  /api/config                        launch config actions and presets
@@ -231,6 +238,20 @@ class HttpServer:
                 return {'ok': True}
         if parts[:1] == ['config']:
             return self.answerConfig(request, parts[1:])
+        if method == 'GET' and parts == ['settings']:
+            return hub.settings
+        if method == 'POST' and parts == ['settings']:
+            return await hub.updateSettings(request.json())
+        if method == 'GET' and parts == ['budget']:
+            return hub.budget.snapshot(with_history=True)
+        if method == 'POST' and parts == ['budget', 'reset']:
+            hub.budget.reset()
+            return {'ok': True}
+        if method == 'POST' and parts == ['budget', 'monitor']:
+            body = request.json()
+            if body.get('machine_id'):
+                return await hub.startMonitor(body['machine_id'])
+            return await hub.stopMonitor()
         if method == 'GET' and parts == ['inventory']:
             return hub.inventory()
         if method == 'POST' and len(parts) == 2 and parts[0] == 'inventory':
@@ -257,6 +278,9 @@ class HttpServer:
                 return await link.scanHostKey()
             await link.trustHostKey(request.json()['fingerprints'])
             return {'ok': True}
+        if method == 'POST' and len(parts) == 2 and parts[0] == 'net':
+            return await self.answerNetTool(machine_id, parts[1],
+                                            request.json())
         if method == 'POST' and len(parts) == 2 and parts[0] == 'vm':
             return hub.vm.run(machine_id, parts[1], request.json()).snapshot()
         if method == 'POST' and parts[:1] == ['terminals']:
@@ -279,11 +303,28 @@ class HttpServer:
         if len(parts) == 3 and parts[0] == 'processes':
             process_id = parts[1]
             if method == 'GET' and parts[2] == 'output':
-                return hub.processOutput(
-                    machine_id, process_id, int(request.queryValue('from', '0')))
+                return await hub.processOutput(
+                    machine_id, process_id, int(request.queryValue('from', '0')),
+                    request.queryValue('refresh') == '1')
             if method == 'POST' and parts[2] == 'stop':
                 await hub.stopProcess(machine_id, process_id)
                 return {'ok': True}
+        return None
+
+    async def answerNetTool(self, machine_id: str, tool: str, body: dict):
+        link = self.hub.link(machine_id)
+        if tool == 'ping':
+            return await link.call('net.ping', {
+                'host': body['host'], 'count': body.get('count', 4)},
+                timeout_s=60.0)
+        if tool == 'tcp':
+            return await link.call('net.tcp', {
+                'host': body['host'], 'port': int(body['port'])},
+                timeout_s=30.0)
+        if tool == 'scan':
+            return await link.call('net.scan', {
+                'cidr': body['cidr'], 'ports': body.get('ports') or [22]},
+                timeout_s=120.0)
         return None
 
     async def answerTerminal(self, request: Request, machine_id: str,

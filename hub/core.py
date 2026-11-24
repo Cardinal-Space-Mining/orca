@@ -14,15 +14,18 @@ from typing import Optional
 from .inventory import (Route, inventoryScopes, loadInventory,
                         readInventoryRaw, writeInventory)
 from .lance_config import ConfigError, LanceConfig
+from .budget import MONITOR_PROCESS_ID, BudgetTracker
 from .deploy import Deployer
 from .link import MachineLink
-from .runs import PlanError, Planner, Run, newRunId
+from .runs import PlanError, Planner, Run, expandHome, newRunId
+from .settings import loadSettings, mergeDefaults, saveSettings
 from .scenarios import loadScenarios
 from .vm import VmController
 
 
 HUB_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AGENT_SOURCE_PATH = os.path.join(HUB_ROOT, 'agent', 'csm_agent.py')
+MONITOR_SOURCE_PATH = os.path.join(HUB_ROOT, 'hub', 'ros_monitor.py')
 SUBSCRIBER_QUEUE_SIZE = 5000
 MAX_FINISHED_RUNS = 20
 
@@ -42,6 +45,8 @@ class Hub:
         self.deployer = Deployer(self)
         self.vm = VmController(self)
         self.stop_event = None
+        self.settings = loadSettings()
+        self.budget = BudgetTracker(self)
         self.lance_config = None
         self.lance_config_error = None
 
@@ -123,6 +128,8 @@ class Hub:
             },
             'machines': [link.snapshot() for link in self.links],
             'runs': [run.snapshot() for run in self.runs.values()],
+            'settings': self.settings,
+            'budget': self.budget.snapshot(with_history=True),
         }
 
     # --- Machines ---
@@ -173,6 +180,89 @@ class Hub:
         for link in links:
             link.publish()
         self.publish('machines.order', {'ids': new_ids})
+
+    # --- Settings ---
+
+    async def updateSettings(self, changes: dict) -> dict:
+        was_competition = self.settings['competition_mode']
+        self.settings = mergeDefaults(changes, self.settings)
+        saveSettings(self.settings)
+        self.publish('settings', self.settings)
+        if self.settings['competition_mode'] != was_competition:
+            await asyncio.gather(*(link.applySettings()
+                                   for link in self.links))
+        self.budget.publish()
+        return self.settings
+
+    # --- net_adapter monitor (for the bandwidth budget) ---
+
+    async def startMonitor(self, machine_id: str) -> dict:
+        '''Run ros_monitor.py on a machine that runs a net_adapter endpoint,
+        with ROS and its workspace sourced and the DDS settings of
+        `run.sh --local`.'''
+        link = self.link(machine_id)
+        workspace = link.state['workspace'] or {}
+        if not link.machine.workspace or not workspace.get('has_install'):
+            raise PlanError('%s has no built workspace' % link.machine.label)
+        await self.stopMonitor()
+        info = link.state['info'] or {}
+        root = expandHome(link.machine.workspace, info)
+        distro = workspace.get('ros_distro') or (
+            workspace.get('ros_distros') or [None])[-1]
+        if not distro:
+            raise PlanError('no ROS found on %s' % link.machine.label)
+        with open(MONITOR_SOURCE_PATH) as file:
+            source = file.read()
+        script = await link.call('file.write', {
+            'path': '~/.csm-hub/ros_monitor.py', 'content': source})
+        command = ('source /opt/ros/%s/setup.bash && source %s/install/'
+                   'setup.bash && ' % (distro, root))
+        if self.settings['budget']['monitor_local_dds']:
+            command += ('export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp '
+                        'CYCLONEDDS_URI=file://%s/src/project/cyclonedds.xml'
+                        ' && ' % root)
+        command += 'exec python3 -u ' + script['path']
+        await link.call('process.start', {
+            'process_id': MONITOR_PROCESS_ID, 'label': 'Bandwidth monitor',
+            'argv': ['bash', '-c', command], 'cwd': root,
+            'meta': {'kind': 'monitor'}})
+        self.budget.setMonitorState(machine_id, 'starting')
+        await self.updateSettings({'budget': {'monitor_machine_id':
+                                              machine_id}})
+        return self.budget.monitor
+
+    async def stopMonitor(self) -> dict:
+        '''Stop the monitor wherever it runs, and wait until it has exited
+        (a new one can't start while it's still shutting down).'''
+        for link in self.links:
+            mirror = link.processes.get(MONITOR_PROCESS_ID)
+            if link.connection is None or mirror is None \
+                    or mirror.record['state'] == 'exited':
+                continue
+            await link.call('process.stop', {
+                'process_id': MONITOR_PROCESS_ID, 'grace_s': 3})
+            for _ in range(100):
+                if mirror.record['state'] == 'exited':
+                    break
+                await asyncio.sleep(0.1)
+        self.budget.setMonitorState(None, 'stopped')
+        return self.budget.monitor
+
+    def onMonitorState(self, machine_id: str, record: dict):
+        if record['state'] != 'exited':
+            if self.budget.monitor['state'] == 'stopped':
+                self.budget.setMonitorState(machine_id, 'starting')
+            return
+        if self.budget.monitor.get('machine_id') != machine_id:
+            return
+        mirror = self.links_by_id[machine_id].processes.get(
+            MONITOR_PROCESS_ID)
+        last_lines = [line for line in (mirror.lines if mirror else [])
+                      if line.strip()][-3:]
+        self.budget.setMonitorState(
+            machine_id, 'stopped', None if record['exit_code'] in (0, None)
+            and not record['exit_signal'] else ' / '.join(last_lines)
+            or 'the monitor exited')
 
     # --- Terminals ---
 
@@ -235,6 +325,9 @@ class Hub:
     def onProcessState(self, machine_id: str, record: dict):
         '''Route an agent's process update to its run, recreating runs the
         hub doesn't know (it restarted while they were running).'''
+        if record['process_id'] == MONITOR_PROCESS_ID:
+            self.onMonitorState(machine_id, record)
+            return
         meta = record.get('meta') or {}
         run_id = meta.get('run_id')
         if not run_id:
@@ -266,9 +359,20 @@ class Hub:
         await self.link(machine_id).call('process.stop',
                                          {'process_id': process_id})
 
-    def processOutput(self, machine_id: str, process_id: str,
-                      from_line: int) -> dict:
-        mirror = self.link(machine_id).processes.get(process_id)
+    async def processOutput(self, machine_id: str, process_id: str,
+                            from_line: int, refresh: bool = False) -> dict:
+        '''Buffered output. With refresh, first fetch what the agent has that
+        the hub didn't stream (competition mode pauses streaming).'''
+        link = self.link(machine_id)
+        mirror = link.processes.get(process_id)
         if mirror is None:
             raise PlanError('no process ' + process_id)
+        if refresh and link.connection is not None:
+            backlog = await link.call('process.output', {
+                'process_id': process_id,
+                'from_line': mirror.nextLineNumber()})
+            link.onProcessOutput({
+                'process_id': process_id,
+                'first_line_number': backlog['first_line_number'],
+                'lines': backlog['lines']})
         return mirror.output(from_line)

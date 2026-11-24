@@ -16,6 +16,7 @@ import sys
 import time
 from typing import Optional
 
+from .budget import MONITOR_PROCESS_ID
 from .inventory import Machine, Route
 from .ssh import (ATTACH_COMMAND, DEPLOY_COMMAND, keyscanCommand,
                   knownHostsName, sshCommand)
@@ -25,10 +26,12 @@ FIRST_EVENT_TIMEOUT_S = 20.0
 CALL_TIMEOUT_S = 15.0
 DEPLOY_TIMEOUT_S = 30.0
 RECONNECT_DELAYS_S = [2, 5, 10, 20]
-STATS_INTERVAL_S = 2.0
-PING_PERIOD_S = 5.0
-VM_PERIOD_S = 5.0
-WORKSPACE_PERIOD_S = 30.0
+# Polling periods: (normal, competition mode). Competition mode keeps the
+# hub's own traffic on the robot's link small.
+STATS_INTERVAL_S = (2.0, 10.0)
+PING_PERIOD_S = (5.0, 15.0)
+VM_PERIOD_S = (5.0, 15.0)
+WORKSPACE_PERIOD_S = (30.0, 120.0)
 STREAM_LIMIT_BYTES = 16 * 1024 * 1024
 ROUTE_STAGGER_S = 0.4
 ROUTE_UPGRADE_PERIOD_S = 60.0
@@ -77,6 +80,9 @@ class AgentConnection:
         self.first_event = asyncio.get_running_loop().create_future()
         self.closed = asyncio.Event()
         self.stderr_lines = collections.deque(maxlen=20)
+        # Payload bytes through this connection, for the hub's own traffic.
+        self.bytes_received = 0
+        self.bytes_sent = 0
         self.reader_task = asyncio.ensure_future(self.readStdout())
         self.stderr_task = asyncio.ensure_future(self.readStderr())
 
@@ -93,6 +99,7 @@ class AgentConnection:
             line = await self.process.stdout.readline()
             if not line:
                 break
+            self.bytes_received += len(line)
             try:
                 message = json.loads(line)
             except ValueError:
@@ -148,10 +155,11 @@ class AgentConnection:
         self.next_id += 1
         future = asyncio.get_running_loop().create_future()
         self.pending[request_id] = future
-        line = json.dumps({'id': request_id, 'method': method,
-                           'params': params or {}}) + '\n'
+        data = (json.dumps({'id': request_id, 'method': method,
+                            'params': params or {}}) + '\n').encode()
+        self.bytes_sent += len(data)
         try:
-            self.process.stdin.write(line.encode())
+            self.process.stdin.write(data)
             await self.process.stdin.drain()
             return await asyncio.wait_for(future, timeout_s)
         finally:
@@ -244,12 +252,15 @@ class MachineLink:
         self.processes = {}  # process id -> ProcessMirror
         self.terminals = set()  # ids of terminals open on this connection
         self.task = None
+        self.traffic_sample = None  # (time, bytes, connection)
+        self.previous_counters = {}  # interface -> (time_s, rx, tx)
         self.state = {
             'connection': {'state': 'idle', 'route': None, 'error': None,
                            'since_s': time.time(), 'retry_at_s': None,
                            'rtt_ms': None, 'clock_offset_ms': None,
                            'agent_hash': None, 'update_pending': False,
-                           'unknown_host_key': None, 'error_details': None},
+                           'unknown_host_key': None, 'error_details': None,
+                           'hub_kbps': None},
             'info': None,
             'stats': None,
             'workspace': None,
@@ -552,7 +563,8 @@ class MachineLink:
         try:
             self.state['info'] = await connection.call('system.info')
             await connection.call(
-                'subscribe', {'stats_interval_s': STATS_INTERVAL_S})
+                'subscribe',
+                {'stats_interval_s': self.period(STATS_INTERVAL_S)})
             self.publish()
             await self.syncProcesses(connection)
             await connection.closed.wait()
@@ -571,7 +583,7 @@ class MachineLink:
     async def syncProcesses(self, connection):
         """Catch up after (re)connecting: watch live output first, then fetch
         whatever was printed while the hub was away."""
-        await connection.call('process.watch', {'enabled': True})
+        await connection.call('process.watch', self.watchParams())
         for record in await connection.call('process.list'):
             self.onProcessState(record)
             mirror = self.processes[record['process_id']]
@@ -583,6 +595,9 @@ class MachineLink:
                 'first_line_number': backlog['first_line_number'],
                 'lines': backlog['lines']})
 
+    def period(self, periods: tuple) -> float:
+        return periods[1 if self.hub.settings['competition_mode'] else 0]
+
     def pollTasks(self) -> list:
         tasks = [self.poll(PING_PERIOD_S, self.measureLatency)]
         if len(self.machine.routes) > 1:
@@ -593,13 +608,33 @@ class MachineLink:
             tasks.append(self.poll(VM_PERIOD_S, self.refreshVm))
         return tasks
 
-    async def poll(self, period_s: float, refresh):
+    async def poll(self, periods: tuple, refresh):
         while True:
             try:
                 await refresh()
             except (AgentError, ConnectionError, asyncio.TimeoutError):
                 pass
-            await asyncio.sleep(period_s)
+            await asyncio.sleep(self.period(periods))
+
+    async def applySettings(self):
+        '''Competition mode changed: re-subscribe at the new rate and watch
+        output accordingly.'''
+        if self.connection is None:
+            return
+        try:
+            await self.call('subscribe', {
+                'stats_interval_s': self.period(STATS_INTERVAL_S)})
+            await self.call('process.watch', self.watchParams())
+        except (AgentError, ConnectionError, asyncio.TimeoutError):
+            pass
+
+    def watchParams(self) -> dict:
+        '''Live output from every process, except in competition mode, where
+        other machines only stream the hub's monitor (output can still be
+        fetched on demand).'''
+        if self.machine.is_local or not self.hub.settings['competition_mode']:
+            return {'enabled': True}
+        return {'enabled': False, 'process_ids': [MONITOR_PROCESS_ID]}
 
     async def preferEarlierRoutes(self):
         '''Connected through a fallback (e.g. the jump through the mac
@@ -625,7 +660,20 @@ class MachineLink:
         # Assumes the request and the reply take equally long, as NTP does.
         offset_s = reply['time_s'] - (sent_s + received_s) / 2.0
         self.setConnection(rtt_ms=(received_s - sent_s) * 1000.0,
-                           clock_offset_ms=offset_s * 1000.0)
+                           clock_offset_ms=offset_s * 1000.0,
+                           hub_kbps=self.hubTrafficKbps(received_s))
+
+    def hubTrafficKbps(self, now_s: float):
+        '''The hub's own payload traffic with this machine since the last
+        call (SSH adds a little on top).'''
+        connection = self.connection
+        total = connection.bytes_received + connection.bytes_sent
+        previous = self.traffic_sample
+        self.traffic_sample = (now_s, total, connection)
+        if previous is None or previous[2] is not connection \
+                or now_s <= previous[0]:
+            return None
+        return (total - previous[1]) * 8.0 / (now_s - previous[0]) / 1000.0
 
     async def refreshWorkspace(self):
         self.state['workspace'] = await self.call(
@@ -641,7 +689,9 @@ class MachineLink:
 
     def onEvent(self, name: str, data):
         if name == 'stats':
+            self.addInterfaceRates(data)
             self.state['stats'] = data
+            self.hub.budget.onStats(self.machine.id, data)
             self.publish()
         elif name == 'process.state':
             self.onProcessState(data)
@@ -654,6 +704,28 @@ class MachineLink:
             self.terminals.discard(data['terminal_id'])
             self.hub.publish('terminal.exit',
                              dict(data, machine_id=self.machine.id))
+
+    def addInterfaceRates(self, stats: dict):
+        '''Bits per second per interface, from the byte counters of this and
+        the previous sample.'''
+        counters = {}
+        for entry in stats.get('interfaces', []):
+            if entry.get('rx_bytes') is None:
+                continue
+            counters[entry['name']] = (stats['time_s'], entry['rx_bytes'],
+                                       entry['tx_bytes'])
+            previous = self.previous_counters.get(entry['name'])
+            if previous is None or stats['time_s'] <= previous[0]:
+                continue
+            period_s = stats['time_s'] - previous[0]
+            received = entry['rx_bytes'] - previous[1]
+            sent = entry['tx_bytes'] - previous[2]
+            if received < 0 or sent < 0:
+                continue  # counters reset (interface re-plugged)
+            entry['rx_bps'] = received * 8.0 / period_s
+            entry['tx_bps'] = sent * 8.0 / period_s
+            entry['period_s'] = period_s
+        self.previous_counters = counters
 
     def endTerminals(self):
         '''Terminals live on the connection; tell the browser they ended.'''
@@ -676,4 +748,7 @@ class MachineLink:
         if mirror is None or not data['lines']:
             return
         mirror.merge(data['first_line_number'], data['lines'])
+        if data['process_id'] == MONITOR_PROCESS_ID:
+            self.hub.budget.onMonitorLines(data['lines'])
+            return
         self.hub.publish('output', dict(data, machine_id=self.machine.id))

@@ -33,6 +33,7 @@ import fcntl
 import getpass
 import glob
 import hashlib
+import ipaddress
 import json
 import os
 import platform
@@ -310,9 +311,12 @@ def linuxInterfaces():
             continue
         flags = entry.get('flags', [])
         operstate = entry.get('operstate')
+        counters = linuxByteCounters(name)
         interfaces.append({
             'name': name,
             'label': None,
+            'rx_bytes': counters[0] if counters else None,
+            'tx_bytes': counters[1] if counters else None,
             'kind': linuxInterfaceKind(name, entry),
             'is_up': operstate == 'UP' or (
                 operstate == 'UNKNOWN' and 'LOWER_UP' in flags),
@@ -323,6 +327,31 @@ def linuxInterfaces():
                 if address.get('family') == 'inet'],
         })
     return interfaces
+
+
+def linuxByteCounters(name):
+    base = '/sys/class/net/%s/statistics/' % name
+    received = readText(base + 'rx_bytes')
+    sent = readText(base + 'tx_bytes')
+    if received is None or sent is None:
+        return None
+    return int(received), int(sent)
+
+
+def macosByteCounters():
+    '''{interface: (received, sent)} from netstat's link-level rows. Counted
+    from the right, since the Address column is sometimes empty.'''
+    output = runCommand(['netstat', '-ibn']) or ''
+    counters = {}
+    for line in output.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 8 or not fields[2].startswith('<Link#'):
+            continue
+        try:
+            counters[fields[0]] = (int(fields[-5]), int(fields[-2]))
+        except ValueError:
+            continue
+    return counters
 
 
 def linuxWifi(interface_name):
@@ -399,6 +428,7 @@ def macosInterfaces(hardware_ports):
     output = runCommand(['ifconfig', '-a'])
     if output is None:
         return []
+    counters = macosByteCounters()
     interfaces = []
     for entry in parseIfconfig(output):
         name = entry['name']
@@ -411,9 +441,12 @@ def macosInterfaces(hardware_ports):
             is_up = entry['status'] == 'active'
         else:
             is_up = 'UP' in entry['flags'] and 'RUNNING' in entry['flags']
+        received, sent = counters.get(name, (None, None))
         interfaces.append({
             'name': name,
             'label': port,
+            'rx_bytes': received,
+            'tx_bytes': sent,
             'kind': macosInterfaceKind(name, port),
             'is_up': is_up,
             'mac': entry['mac'],
@@ -707,6 +740,117 @@ def installedRosDistros():
         return sorted(os.listdir('/opt/ros'))
     except OSError:
         return []
+
+
+
+# --- Network tools ------------------------------------------------------------
+
+
+
+MAX_SCAN_HOSTS = 1024
+SCAN_CONCURRENCY = 200
+NAME_LOOKUP_TIMEOUT_S = 1.0
+
+
+def ping(host, count):
+    '''Round trips to a host with the system ping (ICMP needs no root
+    there).'''
+    wait = ['-W', '1000'] if IS_MACOS else ['-W', '1']
+    try:
+        completed = subprocess.run(
+            ['ping', '-n', '-c', str(count)] + wait + [host],
+            capture_output=True, text=True, timeout=count * 2 + 5)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return {'host': host, 'error': str(error)}
+    output = completed.stdout + completed.stderr
+    loss = re.search(r'([\d.]+)% packet loss', output)
+    times = re.search(r'= ([\d.]+)/([\d.]+)/([\d.]+)', output)
+    return {
+        'host': host,
+        'sent': count,
+        'loss_percent': float(loss.group(1)) if loss else 100.0,
+        'min_ms': float(times.group(1)) if times else None,
+        'average_ms': float(times.group(2)) if times else None,
+        'max_ms': float(times.group(3)) if times else None,
+        'error': None if loss else output.strip().splitlines()[-1:],
+    }
+
+
+async def tcpProbe(host, port, timeout_s):
+    '''"open", "closed" (refused: the host is up), or "no answer".'''
+    started = time.monotonic()
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout_s)
+    except ConnectionRefusedError:
+        return 'closed', (time.monotonic() - started) * 1000.0
+    except (asyncio.TimeoutError, OSError):
+        return 'no answer', None
+    elapsed_ms = (time.monotonic() - started) * 1000.0
+    writer.close()
+    return 'open', elapsed_ms
+
+
+def neighbourTable():
+    '''{ip: mac} from the ARP / neighbour table.'''
+    table = {}
+    if IS_MACOS:
+        output = runCommand(['arp', '-an']) or ''
+        for ip, mac in re.findall(r'\(([\d.]+)\) at ([0-9a-f:]+)', output):
+            table[ip] = mac
+    else:
+        output = runCommand(['ip', 'neigh', 'show']) or ''
+        for ip, mac in re.findall(r'^([\d.]+) .*lladdr ([0-9a-f:]+)', output,
+                                  re.MULTILINE):
+            table[ip] = mac
+    return table
+
+
+async def lookupName(address):
+    loop = asyncio.get_running_loop()
+    try:
+        name, _, _ = await asyncio.wait_for(
+            loop.run_in_executor(None, socket.gethostbyaddr, address),
+            NAME_LOOKUP_TIMEOUT_S)
+        return name
+    except (asyncio.TimeoutError, OSError):
+        return None
+
+
+async def scanNetwork(cidr, ports, timeout_s):
+    '''Hosts in a network that answer on any of the ports (a refused
+    connection counts: something is there).'''
+    network = ipaddress.ip_network(cidr, strict=False)
+    if network.num_addresses > MAX_SCAN_HOSTS + 2:
+        raise ValueError('scan at most %d addresses (a /22)' % MAX_SCAN_HOSTS)
+    limit = asyncio.Semaphore(SCAN_CONCURRENCY)
+
+    async def probe(address, port):
+        async with limit:
+            return address, port, await tcpProbe(address, port, timeout_s)
+
+    started = time.time()
+    results = await asyncio.gather(*(
+        probe(str(address), port) for address in network.hosts()
+        for port in ports))
+    hosts = {}
+    for address, port, (state, elapsed_ms) in results:
+        if state == 'no answer':
+            continue
+        host = hosts.setdefault(address, {'address': address, 'ports': {},
+                                          'rtt_ms': elapsed_ms})
+        host['ports'][str(port)] = state
+        host['rtt_ms'] = min(host['rtt_ms'], elapsed_ms)
+    neighbours = await asyncio.get_running_loop().run_in_executor(
+        None, neighbourTable)
+    names = await asyncio.gather(*(lookupName(address) for address in hosts))
+    for host, name in zip(hosts.values(), names):
+        host['name'] = name
+        host['mac'] = neighbours.get(host['address'])
+    ordered = sorted(hosts.values(),
+                     key=lambda host: ipaddress.ip_address(host['address']))
+    return {'network': str(network), 'ports': ports, 'hosts': ordered,
+            'duration_s': time.time() - started}
 
 
 
@@ -1459,8 +1603,13 @@ class ClientSession:
         self.stats_task = None
         self.request_tasks = set()
         # Output is only sent to clients that ask for it (see process.watch),
-        # so a status-only client costs almost no bandwidth.
+        # so a status-only client costs almost no bandwidth: all processes,
+        # or only some (competition mode watches just the hub's monitor).
         self.watches_output = False
+        self.watched_ids = set()
+
+    def watches(self, process_id):
+        return self.watches_output or process_id in self.watched_ids
 
     async def run(self):
         await self.send({'event': 'hello', 'data': self.daemon.hello()})
@@ -1555,6 +1704,9 @@ class Daemon:
             'terminal.input': self.methodTerminalInput,
             'terminal.resize': self.methodTerminalResize,
             'terminal.close': self.methodTerminalClose,
+            'net.ping': self.methodNetPing,
+            'net.tcp': self.methodNetTcp,
+            'net.scan': self.methodNetScan,
             'bags.list': self.methodBagsList,
             'bags.delete': self.methodBagsDelete,
             'logs.list': self.methodLogsList,
@@ -1570,7 +1722,7 @@ class Daemon:
     def broadcast(self, event, data, only_watchers=False):
         message = {'event': event, 'data': data}
         for session in list(self.sessions):
-            if only_watchers and not session.watches_output:
+            if only_watchers and not session.watches(data['process_id']):
                 continue
             asyncio.ensure_future(session.send(message))
 
@@ -1638,8 +1790,11 @@ class Daemon:
         return process.output(int(params.get('from_line', 0)))
 
     async def methodProcessWatch(self, session, params):
+        '''params: enabled (all processes), process_ids (just these).'''
         session.watches_output = bool(params.get('enabled', True))
-        return {'watching': session.watches_output}
+        session.watched_ids = set(params.get('process_ids') or [])
+        return {'watching': session.watches_output,
+                'process_ids': sorted(session.watched_ids)}
 
     async def methodFileWrite(self, session, params):
         '''Write a small text file (e.g. a launch overlay). Returns its
@@ -1680,6 +1835,22 @@ class Daemon:
 
     async def methodWorkspaceRefs(self, session, params):
         return await self.inThread(workspaceRefs, params['path'])
+
+    async def methodNetPing(self, session, params):
+        return await self.inThread(ping, params['host'],
+                                   max(1, min(int(params.get('count', 4)), 20)))
+
+    async def methodNetTcp(self, session, params):
+        state, elapsed_ms = await tcpProbe(
+            params['host'], int(params['port']),
+            float(params.get('timeout_s', 2.0)))
+        return {'host': params['host'], 'port': int(params['port']),
+                'state': state, 'time_ms': elapsed_ms}
+
+    async def methodNetScan(self, session, params):
+        ports = [int(port) for port in params.get('ports') or [22]]
+        return await scanNetwork(params['cidr'], ports,
+                                 float(params.get('timeout_s', 0.6)))
 
     async def methodBagsList(self, session, params):
         return await self.inThread(listBags, params['workspace'])

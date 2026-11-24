@@ -26,6 +26,7 @@ CAN permissions): [docs/machine-setup.md](docs/machine-setup.md).
 | Deploy | Push this workspace's `src/` to other machines and build there; compare first to see exactly what changes. |
 | Bags | Recordings on each machine with length, size and topics; pull them here, delete them there once pulled. |
 | Logs | Hub run logs, each package's latest build log, ROS logs, the agent's and the VM autostart log, per machine. |
+| Network | The comm-link bandwidth budget (average against the guidebook's 4,000 kbps, per source and per topic), competition mode, live traffic on every interface, Wi-Fi channels, and ping / port check / network scan from any machine. |
 | Config | Browse every action and preset of `lance/config`, what a preset inherits and enables, and try `key:=value` arguments without launching. |
 
 ## Machines
@@ -174,6 +175,30 @@ offered once an identical copy is here.
   sudo for QEMU and socat on the mac ([docs/machine-setup.md](
   docs/machine-setup.md)).
 
+## The robot's link
+
+- **Bandwidth budget.** The guidebook allows an average of 4,000 kbps on the
+  comm link over a run, minus 500 kbps per NASA camera switched on (14.1.18-19).
+  The Network page averages two measurements from when you press *Start a new
+  average* (do it as a run starts):
+  - **Radio link**: the byte counters of the robot's link interface (pick the
+    robot computer's Wi-Fi adapter). Everything on the link: net_adapter,
+    TCP/IP and zenoh overhead, the hub, anything else.
+  - **net_adapter**: what the endpoints report on `/lance/net_bandwidth/*`,
+    with a per-topic breakdown and the link latency. Needs the *monitor*: a
+    small rclpy script the hub runs on a machine with a net_adapter endpoint
+    (normally the driver station), with the same DDS settings as
+    `run.sh --local`.
+- **Competition mode** keeps the hub's own traffic small: status every 10 s,
+  no live output from other machines (each console has *Fetch output now*),
+  slower background checks. Measured on the test rig: about 0.5 kbps to the
+  robot VM, against 5.5 kbps normally. The top bar shows it, with the
+  running average.
+- **Tools** run from any machine (what it can reach is what the robot code on
+  it can reach): ping, TCP port check (SSH, zenoh 7447, lidar 2111,
+  Foxglove 8765) and a scan of a network (up to a /22) that lists who answers,
+  with MAC addresses and which inventory machine each address belongs to.
+
 ## How it works
 
 ```
@@ -210,8 +235,9 @@ offered once an identical copy is here.
 | 1 | Scenarios and synchronized launch with output streaming; config browser; value overrides (IP pairing); host key trust | done |
 | 2 | Deploy (compare, push, remote build, code fingerprints), bags, logs | done |
 | 3 | VM control, terminals and serial console; editing the inventory in the app | done |
-| 4 | Network tools, bandwidth budget, competition mode | next |
-| 5 | Native macOS processes | |
+| 4 | Network tools, bandwidth budget, competition mode; resizable, dockable terminals | done |
+| 5 | Configurability: edit scenarios, launch-config presets (with descriptions) and hub settings in the app | next |
+| 6 | Native macOS processes | |
 
 Bugs and inconsistencies found along the way, in this and other repos, are
 logged in [FINDINGS.md](FINDINGS.md). Test rig setup: [docs/dev-rig-setup.md](

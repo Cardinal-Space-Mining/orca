@@ -14,6 +14,7 @@ import { BagsView } from './js/bags.js';
 import { LogsView } from './js/logs.js';
 import { InventoryView } from './js/inventory.js';
 import { TerminalDock } from './js/terminals.js';
+import { NetworkView } from './js/network.js';
 
 
 const TABS = [
@@ -24,7 +25,7 @@ const TABS = [
     { id: 'bags', label: 'Bags' },
     { id: 'logs', label: 'Logs' },
     { id: 'config', label: 'Config' },
-    { id: 'network', label: 'Network', soon: true },
+    { id: 'network', label: 'Network' },
 ];
 
 // The open tab lives in the URL (#/runs/<run id>) so a reload keeps it.
@@ -73,6 +74,12 @@ function TopBar({ state, isLive, tab, navigate }) {
                     <span class="mono">${workspace.branch} @ ${shortCommit(
                         workspace.head)}</span>
                 </div>`}
+            ${state && state.settings.competition_mode && html`
+                <a class="competition-pill" href="#/network"
+                    title="Competition mode: less hub traffic on the robot's link">
+                    Competition${state.budget.sources.interface.average_kbps
+                        != null ? ` · ${Math.round(state.budget.sources
+                            .interface.average_kbps)} kbps avg` : ''}</a>`}
             <div class="live">
                 <span class="dot ${isLive ? 'good' : 'bad pulse'}"></span>
                 ${isLive ? 'Live' : 'Hub disconnected'}
@@ -101,6 +108,8 @@ function Page({ state, location, navigate, now }) {
             return html`<${LogsView} state=${state}
                 selectedId=${location.detail} now=${now}
                 onSelect=${(machineId) => navigate('logs', machineId)} />`;
+        case 'network':
+            return html`<${NetworkView} state=${state} now=${now} />`;
         case 'config':
             return html`<${ConfigView} />`;
         default:

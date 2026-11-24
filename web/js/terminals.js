@@ -220,41 +220,175 @@ function TerminalView({ entry, isVisible }) {
         style=${isVisible ? '' : 'display: none'}></div>`;
 }
 
+// --- Dock layout ---------------------------------------------------------------
+
+// 16x16 icons: where the panel sits, maximize/restore, show/hide.
+const ICONS = {
+    bottom: 'M2 2.5h12v11H2z M2 9.5h12',
+    right: 'M2 2.5h12v11H2z M9.5 2.5v11',
+    maximize: 'M3 3h10v10H3z',
+    restore: 'M5 3h8v8H5z M3 5v8h8',
+    hide: 'M4 6l4 4 4-4',
+    show: 'M4 10l4-4 4 4',
+};
+
+function Icon({ name }) {
+    return html`<svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+        stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"
+        stroke-linecap="round"><path d=${ICONS[name]} /></svg>`;
+}
+
+// Docked at the bottom or the right, resizable by dragging its inner edge,
+// maximizable; remembered per browser. The page makes room for it (body
+// padding), so it never covers anything.
+const LAYOUT_KEY = 'csm-hub.terminal-dock';
+const MIN_SIZE = 160;
+const MINIMIZED_HEIGHT = 41;
+const TOPBAR_HEIGHT = 60;
+
+function loadLayout() {
+    const defaults = { position: 'bottom', bottom: 0.42, right: 0.45,
+        isMaximized: false };
+    try {
+        return { ...defaults,
+            ...JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}') };
+    } catch (failure) {
+        return defaults;
+    }
+}
+
+function useDockLayout() {
+    const [layout, setLayout] = useState(loadLayout);
+    const update = (changes) => setLayout((previous) => {
+        const next = { ...previous, ...changes };
+        localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
+        return next;
+    });
+    return [layout, update];
+}
+
+// Sizes are stored as fractions of the window so they survive resizing.
+function dockSize(layout) {
+    const isRight = layout.position === 'right';
+    const total = isRight ? window.innerWidth
+        : window.innerHeight - TOPBAR_HEIGHT;
+    if (layout.isMaximized) return Math.round(total * (isRight ? 0.8 : 1));
+    return Math.round(Math.max(MIN_SIZE,
+        Math.min(total - 120, total * layout[layout.position])));
+}
+
+function ResizeHandle({ layout, setLayout }) {
+    function onPointerDown(event) {
+        event.preventDefault();
+        const handle = event.currentTarget;
+        handle.setPointerCapture(event.pointerId);
+        const isRight = layout.position === 'right';
+        const total = isRight ? window.innerWidth
+            : window.innerHeight - TOPBAR_HEIGHT;
+        const move = (moveEvent) => {
+            const size = isRight ? window.innerWidth - moveEvent.clientX
+                : window.innerHeight - moveEvent.clientY;
+            setLayout({ [layout.position]: Math.max(MIN_SIZE, size) / total,
+                isMaximized: false });
+        };
+        const up = () => {
+            handle.removeEventListener('pointermove', move);
+            handle.removeEventListener('pointerup', up);
+            document.body.classList.remove('is-resizing');
+        };
+        handle.addEventListener('pointermove', move);
+        handle.addEventListener('pointerup', up);
+        document.body.classList.add('is-resizing');
+    }
+    return html`<div class="dock-handle ${layout.position}"
+        onPointerDown=${onPointerDown}
+        onDblClick=${() => setLayout({ isMaximized: !layout.isMaximized })}
+        title="Drag to resize; double-click to maximize"></div>`;
+}
+
 export function TerminalDock() {
     const store = useTerminalStore();
-    if (store.entries.length === 0) return null;
+    const [layout, setLayout] = useDockLayout();
+    const [, setWindowVersion] = useState(0);
+    const isOpen = store.entries.length > 0;
+    const isMinimized = store.isMinimized;
+    const isRight = layout.position === 'right' && !isMinimized;
+    const size = dockSize(layout);
+
+    useEffect(() => {
+        const onResize = () => setWindowVersion((version) => version + 1);
+        window.addEventListener('resize', onResize);
+        return () => window.removeEventListener('resize', onResize);
+    }, []);
+
+    // Make room for the dock beside or below the page.
+    useEffect(() => {
+        const style = document.body.style;
+        style.paddingRight = isOpen && isRight ? `${size}px` : '';
+        style.paddingBottom = !isOpen ? ''
+            : isMinimized ? `${MINIMIZED_HEIGHT}px`
+            : isRight ? '' : `${size}px`;
+    }, [isOpen, isRight, isMinimized, size]);
+
+    if (!isOpen) return null;
     const toggle = () => {
         store.isMinimized = !store.isMinimized;
         store.notify();
     };
+    const dockStyle = isMinimized ? ''
+        : isRight ? `width: ${size}px` : `height: ${size}px`;
+    const iconButton = (label, title, onClick, isActive = false) => html`
+        <button class="dock-button ${isActive ? 'active' : ''}" title=${title}
+            onClick=${onClick}>${label}</button>`;
     return html`
-        <div class="terminal-dock ${store.isMinimized ? 'minimized' : ''}">
+        <div class="terminal-dock ${isRight ? 'right' : 'bottom'}
+            ${isMinimized ? 'minimized' : ''}" style=${dockStyle}>
+            ${!isMinimized && html`<${ResizeHandle} layout=${layout}
+                setLayout=${setLayout} />`}
             <div class="terminal-tabs">
-                ${store.entries.map((entry) => html`
-                    <div class="terminal-tab ${entry.key === store.activeKey
-                        ? 'active' : ''} ${entry.exited ? 'exited' : ''}"
-                        key=${entry.key}
-                        onClick=${() => {
-                            store.activeKey = entry.key;
-                            store.isMinimized = false;
-                            store.notify();
-                        }}>
-                        <span class="dot ${entry.exited ? '' : 'good'}"></span>
-                        ${entry.title}
-                        <button class="tab-close" title="Close"
-                            onClick=${(event) => {
-                                event.stopPropagation();
-                                store.close(entry);
-                            }}>×</button>
-                    </div>`)}
-                <span class="spacer"></span>
-                <button class="link-button" onClick=${toggle}>
-                    ${store.isMinimized ? 'Show' : 'Hide'}</button>
+                <div class="terminal-tab-list">
+                    ${store.entries.map((entry) => html`
+                        <div class="terminal-tab ${entry.key === store.activeKey
+                            ? 'active' : ''} ${entry.exited ? 'exited' : ''}"
+                            key=${entry.key} title=${entry.title}
+                            onClick=${() => {
+                                store.activeKey = entry.key;
+                                store.isMinimized = false;
+                                store.notify();
+                            }}>
+                            <span class="dot ${entry.exited ? '' : 'good'}">
+                                </span>
+                            <span class="terminal-tab-title">${entry.title}
+                                </span>
+                            <button class="tab-close" title="Close"
+                                onClick=${(event) => {
+                                    event.stopPropagation();
+                                    store.close(entry);
+                                }}>×</button>
+                        </div>`)}
+                </div>
+                <div class="dock-buttons">
+                    ${iconButton(html`<${Icon} name="bottom" />`,
+                        'Dock at the bottom', () => setLayout(
+                            { position: 'bottom' }),
+                        layout.position === 'bottom')}
+                    ${iconButton(html`<${Icon} name="right" />`,
+                        'Dock on the right (beside the page)', () => setLayout(
+                            { position: 'right' }),
+                        layout.position === 'right')}
+                    ${!isMinimized && iconButton(html`<${Icon}
+                        name=${layout.isMaximized ? 'restore' : 'maximize'} />`,
+                        layout.isMaximized ? 'Restore size' : 'Maximize',
+                        () => setLayout({ isMaximized: !layout.isMaximized }))}
+                    ${iconButton(html`<${Icon}
+                        name=${isMinimized ? 'show' : 'hide'} />`,
+                        isMinimized ? 'Show' : 'Hide', toggle)}
+                </div>
             </div>
             <div class="terminal-body">
                 ${store.entries.map((entry) => html`<${TerminalView}
                     key=${entry.key} entry=${entry}
-                    isVisible=${!store.isMinimized
+                    isVisible=${!isMinimized
                         && entry.key === store.activeKey} />`)}
             </div>
         </div>`;

@@ -1,8 +1,10 @@
 // The runs page: everything the hub has launched, with live output.
 
 import { useState } from 'preact/hooks';
-import { html, formatDuration, formatAgo, postJson } from './common.js';
+import { html, formatDuration, formatAgo, getJson, postJson }
+    from './common.js';
 import { Console } from './console.js';
+import { outputStore } from './state.js';
 
 
 const RUN_STATE_LEVELS = {
@@ -96,7 +98,30 @@ function ProcessHeader({ entry }) {
         </div>`;
 }
 
-function RunDetail({ run, now }) {
+// In competition mode other machines don't stream output (to save the
+// robot's link); fetch it when needed.
+function PausedNotice({ entry }) {
+    const [isFetching, setIsFetching] = useState(false);
+    async function fetchOutput() {
+        setIsFetching(true);
+        try {
+            const output = await getJson(`/api/machines/${encodeURIComponent(
+                entry.machine_id)}/processes/${encodeURIComponent(
+                entry.process_id)}/output?from=0&refresh=1`);
+            outputStore.merge(entry.machine_id, entry.process_id,
+                output.first_line_number, output.lines);
+        } finally {
+            setIsFetching(false);
+        }
+    }
+    return html`<div class="paused-notice">Live output paused (competition
+        mode).
+        <button class="button small" disabled=${isFetching}
+            onClick=${fetchOutput}>${isFetching ? 'Fetching…'
+                : 'Fetch output now'}</button></div>`;
+}
+
+function RunDetail({ run, now, isCompetition }) {
     const [selectedKey, setSelectedKey] = useState(null);
     const [sideBySide, setSideBySide] = useState(run.processes.length > 1);
     const processes = run.processes;
@@ -118,6 +143,8 @@ function RunDetail({ run, now }) {
                 ${exitText(entry.record) && html`<span class="pill">${
                     exitText(entry.record)}</span>`}</div>`}
             <${ProcessHeader} entry=${entry} />
+            ${isCompetition && entry.machine_id !== 'local' && entry.record
+                && html`<${PausedNotice} entry=${entry} />`}
             ${entry.record
                 ? html`<${Console} machineId=${entry.machine_id}
                     processId=${entry.process_id}
@@ -178,6 +205,7 @@ export function RunsView({ state, selectedId, onSelect, now }) {
                 <${RunList} runs=${runs} selectedId=${run && run.run_id}
                     onSelect=${onSelect} now=${now} />
                 ${run && html`<${RunDetail} key=${run.run_id} run=${run}
-                    now=${now} />`}
+                    now=${now} isCompetition=${state.settings
+                        .competition_mode} />`}
             </div>`}`;
 }

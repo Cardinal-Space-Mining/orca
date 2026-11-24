@@ -25,6 +25,7 @@ hub avoids it; the underlying issue is still there).
 | L12 | `sync.sh` `--ws` | Pushes `src/.git` with `--delete`, so a push removes commits, branches and stashes that only exist on the target. The M2 VM had 5 such stashes (February WIP); the hub's push protects `.git` from deletion and reports target-only refs before pushing. | worked around (hub) |
 | L13 | `sync.sh` | Pushes `__pycache__`/`.pyc` files along with the code. | worked around (hub) |
 | L14 | `build.sh` | Runs colcon twice (everything but lance, then lance), so `log/latest_build` only holds lance's logs; the other packages' logs are in the previous `build_*` directory. Not a bug, but easy to trip over when looking for a build error. | info (hub lists each package's newest log) |
+| L15 | `net_adapter` motor `*/info` channels | In the two-machine motor sim, the five Talon `*/info` topics sent to the client were 120 of net_adapter's 129 kbps (24 kbps each, at the motor-sim rate). Not a bug; the obvious place to look if the real robot comes close to the 4,000 kbps budget. | info |
 
 ## csm-vm
 

@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { getJson } from './common.js';
 import { terminalStore } from './terminals.js';
+import { trafficStore } from './traffic.js';
 
 
 // --- Process output store ----------------------------------------------------
@@ -121,6 +122,22 @@ function replaceRun(previous, run) {
     return { ...previous, runs: [...runs, run] };
 }
 
+// Budget events carry the points added since the last one; a reset carries
+// the whole (empty) history.
+const BUDGET_HISTORY_S = 15 * 60;
+
+function mergeBudget(previous, update) {
+    if (update.history || !previous) return update;
+    const history = {};
+    for (const [source, points] of Object.entries(previous.history || {})) {
+        const added = (update.new_points || {})[source] || [];
+        const cutoff = Date.now() / 1000 - BUDGET_HISTORY_S;
+        history[source] = [...points, ...added].filter(
+            (point) => point[0] >= cutoff);
+    }
+    return { ...update, history };
+}
+
 export function useHubState() {
     const [state, setState] = useState(null);
     const [isLive, setIsLive] = useState(false);
@@ -132,11 +149,18 @@ export function useHubState() {
         events.addEventListener('open', () => setIsLive(true));
         events.addEventListener('error', () => setIsLive(false));
         on('snapshot', (snapshot) => {
+            snapshot.machines.forEach((entry) => trafficStore.add(entry));
             setState(snapshot);
             setIsLive(true);
         });
-        on('machine', (machine) =>
-            setState((previous) => replaceMachine(previous, machine)));
+        on('machine', (machine) => {
+            trafficStore.add(machine);
+            setState((previous) => replaceMachine(previous, machine));
+        });
+        on('settings', (settings) => setState((previous) => previous
+            && { ...previous, settings }));
+        on('budget', (budget) => setState((previous) => previous
+            && { ...previous, budget: mergeBudget(previous.budget, budget) }));
         on('run', (run) => setState((previous) => replaceRun(previous, run)));
         on('run.removed', ({ run_id }) => setState((previous) => previous && {
             ...previous,

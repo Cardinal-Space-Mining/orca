@@ -26,6 +26,8 @@ The daemon sends a "hello" event as soon as a client connects.
 '''
 
 import asyncio
+import codecs
+import collections
 import ctypes
 import fcntl
 import getpass
@@ -35,11 +37,14 @@ import json
 import os
 import platform
 import plistlib
+import pty
 import re
 import signal
 import socket
+import struct
 import subprocess
 import sys
+import termios
 import threading
 import time
 
@@ -48,14 +53,36 @@ import time
 
 
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 AGENT_PATH = os.path.abspath(__file__)
-AGENT_DIR = os.path.join(os.path.expanduser('~'), '.csm-hub')
+# CSM_HUB_AGENT_DIR lets tests run an agent beside the real one.
+AGENT_DIR = os.environ.get('CSM_HUB_AGENT_DIR') \
+    or os.path.join(os.path.expanduser('~'), '.csm-hub')
 SOCKET_PATH = os.path.join(AGENT_DIR, 'agent.sock')
+# Unix socket paths are limited to ~104 bytes, so the daemon and `attach`
+# both work from AGENT_DIR and use this relative name.
+SOCKET_NAME = 'agent.sock'
 LOCK_PATH = os.path.join(AGENT_DIR, 'daemon.lock')
 LOG_PATH = os.path.join(AGENT_DIR, 'agent.log')
+RUNS_DIR = os.path.join(AGENT_DIR, 'runs')
 MAX_LOG_BYTES = 2 * 1024 * 1024
+
+# --- Supervised processes ---
+# Robot disks are small (the VM's is 64 GB and is backed up whole), so cap
+# what one process can write to its log.
+MAX_PROCESS_LOG_BYTES = 20 * 1024 * 1024
+MAX_BUFFERED_LINES = 5000
+MAX_FINISHED_PROCESSES = 30
+MAX_LINE_CHARACTERS = 4000
+OUTPUT_FLUSH_S = 0.1
+PARTIAL_LINE_FLUSH_S = 0.5
+PTY_COLUMNS = 200
+PTY_ROWS = 50
+# Ctrl-C semantics: SIGINT to the whole process group first, then escalate.
+DEFAULT_STOP_GRACE_S = 20.0
+TERM_GRACE_S = 5.0
+RUN_LOG_MAX_AGE_S = 14 * 24 * 3600
 
 IS_MACOS = sys.platform == 'darwin'
 # Non-interactive SSH sessions on macOS don't read .zprofile, so Homebrew's
@@ -656,6 +683,317 @@ def vmStatus(csm_vm_path):
 
 
 
+# --- Supervised processes -----------------------------------------------------
+
+
+
+CONTROL_CHARACTERS = re.compile(r'[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f]')
+
+
+def cleanLine(text):
+    '''Keep colour codes (the web app renders them) but drop other control
+    characters. A carriage return mid-line (progress bars) keeps only the
+    last segment, like a terminal would show.'''
+    text = text.rstrip('\r')
+    if '\r' in text:
+        text = text.rsplit('\r', 1)[1]
+    text = CONTROL_CHARACTERS.sub('', text)
+    return text[:MAX_LINE_CHARACTERS]
+
+
+def removeOldRunLogs():
+    '''Delete run log directories older than RUN_LOG_MAX_AGE_S.'''
+    cutoff_s = time.time() - RUN_LOG_MAX_AGE_S
+    for path in glob.glob(os.path.join(RUNS_DIR, '*')):
+        try:
+            if os.path.isdir(path) and os.stat(path).st_mtime < cutoff_s:
+                for name in os.listdir(path):
+                    os.unlink(os.path.join(path, name))
+                os.rmdir(path)
+        except OSError:
+            pass
+
+
+class SupervisedProcess:
+    '''One process started for the hub. Runs on a pseudo-terminal so programs
+    line-buffer and colour their output as they would in a terminal, in its
+    own process group so stopping it reaches every child (like Ctrl-C).
+
+    The reader and waiter threads hand everything to the event loop through
+    call_soon_threadsafe; all state below is owned by the loop thread.'''
+
+    def __init__(self, manager, params):
+        self.manager = manager
+        self.process_id = params['process_id']
+        self.label = params.get('label') or self.process_id
+        self.argv = params['argv']
+        self.cwd = os.path.expanduser(params.get('cwd') or '~')
+        self.meta = params.get('meta') or {}
+        self.extra_env = params.get('env') or {}
+
+        # --- Lifecycle ---
+        self.popen = None
+        self.state = 'starting'  # starting, running, stopping, exited
+        self.started_s = None
+        self.ended_s = None
+        self.exit_code = None
+        self.exit_signal = None
+        self.stop_requested_s = None
+        self.stop_task = None
+
+        # --- Output ---
+        self.lines = collections.deque(maxlen=MAX_BUFFERED_LINES)
+        self.next_line_number = 0  # number the next complete line gets
+        self.partial = ''
+        self.partial_since_s = None
+        self.decoder = codecs.getincrementaldecoder('utf-8')('replace')
+        self.pending_lines = []  # not yet sent to watchers
+        self.flush_handle = None
+        run_directory = os.path.join(
+            RUNS_DIR, re.sub(r'[^\w.-]', '_', self.meta.get('run_id', 'misc')))
+        os.makedirs(run_directory, exist_ok=True)
+        self.log_path = os.path.join(
+            run_directory, re.sub(r'[^\w.-]', '_', self.process_id) + '.log')
+        self.log_file = None
+        self.log_bytes = 0
+
+    def record(self):
+        return {
+            'process_id': self.process_id,
+            'label': self.label,
+            'argv': self.argv,
+            'cwd': self.cwd,
+            'meta': self.meta,
+            'pid': self.popen.pid if self.popen else None,
+            'state': self.state,
+            'started_s': self.started_s,
+            'ended_s': self.ended_s,
+            'exit_code': self.exit_code,
+            'exit_signal': self.exit_signal,
+            'num_lines': self.next_line_number,
+            'log_path': self.log_path,
+        }
+
+    def isRunning(self):
+        return self.state in ('starting', 'running', 'stopping')
+
+    # --- Starting ---
+
+    def environment(self):
+        environment = dict(os.environ)
+        environment.update({
+            'PYTHONUNBUFFERED': '1',
+            'RCUTILS_COLORIZED_OUTPUT': '1',
+            'RCUTILS_LOGGING_BUFFERED_STREAM': '0',
+            'TERM': 'xterm-256color',
+            'COLUMNS': str(PTY_COLUMNS),
+        })
+        environment.update(
+            {str(key): str(value) for key, value in self.extra_env.items()})
+        return environment
+
+    def start(self, loop):
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ,
+                    struct.pack('HHHH', PTY_ROWS, PTY_COLUMNS, 0, 0))
+        self.log_file = open(self.log_path, 'ab')
+        try:
+            self.popen = subprocess.Popen(
+                self.argv, cwd=self.cwd, env=self.environment(),
+                stdin=subprocess.DEVNULL, stdout=slave, stderr=slave,
+                start_new_session=True, close_fds=True)
+        except OSError as error:
+            os.close(master)
+            os.close(slave)
+            self.log_file.close()
+            raise RuntimeError('could not start %s: %s'
+                               % (self.argv[0], error))
+        os.close(slave)  # the child holds its own copies
+        self.state = 'running'
+        self.started_s = time.time()
+        self.writeLog(('$ %s  (in %s)\n' % (
+            ' '.join(self.argv), self.cwd)).encode())
+        threading.Thread(target=self.readOutput, args=(master, loop),
+                         daemon=True).start()
+        threading.Thread(target=self.waitForExit, args=(loop,),
+                         daemon=True).start()
+
+    # --- Threads ---
+
+    def readOutput(self, master, loop):
+        while True:
+            try:
+                data = os.read(master, 65536)
+            except OSError:  # EIO on Linux once every writer has closed
+                data = b''
+            if not data:
+                break
+            loop.call_soon_threadsafe(self.onOutput, data)
+        os.close(master)
+        loop.call_soon_threadsafe(self.onOutputClosed)
+
+    def waitForExit(self, loop):
+        return_code = self.popen.wait()
+        loop.call_soon_threadsafe(self.onExit, return_code)
+
+    # --- Output (loop thread) ---
+
+    def writeLog(self, data):
+        if self.log_bytes >= MAX_PROCESS_LOG_BYTES:
+            return
+        self.log_bytes += len(data)
+        self.log_file.write(data)
+        if self.log_bytes >= MAX_PROCESS_LOG_BYTES:
+            self.log_file.write(b'\n[csm-hub: log size limit reached; '
+                                b'further output is not saved]\n')
+        self.log_file.flush()
+
+    def onOutput(self, chunk):
+        self.writeLog(chunk)
+        # The incremental decoder keeps a multi-byte character that was split
+        # across two reads.
+        text = self.partial + self.decoder.decode(chunk)
+        pieces = text.split('\n')
+        self.partial = pieces.pop()
+        for piece in pieces:
+            self.addLine(cleanLine(piece))
+        self.partial_since_s = time.time() if self.partial else None
+        self.scheduleFlush()
+
+    def addLine(self, line):
+        self.lines.append(line)
+        self.pending_lines.append(line)
+        self.next_line_number += 1
+
+    def scheduleFlush(self):
+        if self.flush_handle is None:
+            self.flush_handle = asyncio.get_running_loop().call_later(
+                OUTPUT_FLUSH_S, self.flush)
+
+    def flush(self):
+        self.flush_handle = None
+        # A prompt or progress line without a newline still gets shown.
+        if self.partial and self.partial_since_s \
+                and time.time() - self.partial_since_s > PARTIAL_LINE_FLUSH_S:
+            self.addLine(cleanLine(self.partial))
+            self.partial = ''
+            self.partial_since_s = None
+        elif self.partial:
+            self.scheduleFlush()
+        if self.pending_lines:
+            lines, self.pending_lines = self.pending_lines, []
+            self.manager.broadcastOutput(
+                self.process_id, self.next_line_number - len(lines), lines)
+
+    def onOutputClosed(self):
+        if self.partial:
+            self.addLine(cleanLine(self.partial))
+            self.partial = ''
+        if self.flush_handle:
+            self.flush_handle.cancel()
+            self.flush_handle = None
+        self.flush()
+
+    def onExit(self, return_code):
+        self.ended_s = time.time()
+        if return_code < 0:
+            self.exit_signal = signal.Signals(-return_code).name
+        else:
+            self.exit_code = return_code
+        self.state = 'exited'
+        if self.stop_task:
+            self.stop_task.cancel()
+        summary = ('exited with code %d' % return_code if return_code >= 0
+                   else 'killed by %s' % self.exit_signal)
+        self.writeLog(('\n[csm-hub: process %s]\n' % summary).encode())
+        self.log_file.close()
+        self.manager.broadcastState(self)
+
+    def output(self, from_line):
+        '''Buffered lines from line number from_line on (as far as the buffer
+        reaches back).'''
+        first_buffered = self.next_line_number - len(self.lines)
+        start = max(from_line, first_buffered)
+        lines = list(self.lines)[start - first_buffered:]
+        return {'first_line_number': start, 'lines': lines,
+                'next_line_number': self.next_line_number}
+
+    # --- Stopping ---
+
+    def signalGroup(self, signal_number):
+        try:
+            os.killpg(self.popen.pid, signal_number)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def stop(self, grace_s):
+        if not self.isRunning():
+            return
+        if self.state == 'stopping':
+            # Asked twice: skip ahead to the next step.
+            self.signalGroup(signal.SIGKILL)
+            return
+        self.state = 'stopping'
+        self.stop_requested_s = time.time()
+        self.manager.broadcastState(self)
+        self.stop_task = asyncio.ensure_future(self.escalate(grace_s))
+
+    async def escalate(self, grace_s):
+        self.signalGroup(signal.SIGINT)
+        await asyncio.sleep(grace_s)
+        self.signalGroup(signal.SIGTERM)
+        await asyncio.sleep(TERM_GRACE_S)
+        self.signalGroup(signal.SIGKILL)
+
+
+class ProcessManager:
+
+    def __init__(self, daemon):
+        self.daemon = daemon
+        self.processes = collections.OrderedDict()  # process id -> process
+
+    def get(self, process_id):
+        process = self.processes.get(process_id)
+        if process is None:
+            raise KeyError('no process ' + str(process_id))
+        return process
+
+    def numRunning(self):
+        return len([process for process in self.processes.values()
+                    if process.isRunning()])
+
+    def start(self, params):
+        existing = self.processes.get(params['process_id'])
+        if existing is not None and existing.isRunning():
+            raise RuntimeError('process %s is already running'
+                               % params['process_id'])
+        removeOldRunLogs()
+        process = SupervisedProcess(self, params)
+        process.start(asyncio.get_running_loop())
+        self.processes.pop(process.process_id, None)
+        self.processes[process.process_id] = process
+        self.forgetOldProcesses()
+        self.broadcastState(process)
+        return process.record()
+
+    def forgetOldProcesses(self):
+        finished = [process_id for process_id, process
+                    in self.processes.items() if not process.isRunning()]
+        for process_id in finished[:-MAX_FINISHED_PROCESSES]:
+            del self.processes[process_id]
+
+    def broadcastState(self, process):
+        self.daemon.broadcast('process.state', process.record())
+
+    def broadcastOutput(self, process_id, first_line_number, lines):
+        self.daemon.broadcast('process.output', {
+            'process_id': process_id,
+            'first_line_number': first_line_number,
+            'lines': lines,
+        }, only_watchers=True)
+
+
+
 # --- Daemon -------------------------------------------------------------------
 
 
@@ -670,6 +1008,9 @@ class ClientSession:
         self.write_lock = asyncio.Lock()
         self.stats_task = None
         self.request_tasks = set()
+        # Output is only sent to clients that ask for it (see process.watch),
+        # so a status-only client costs almost no bandwidth.
+        self.watches_output = False
 
     async def run(self):
         await self.send({'event': 'hello', 'data': self.daemon.hello()})
@@ -744,6 +1085,7 @@ class Daemon:
         self.stats_lock = None
         self.last_stats = None
         self.last_stats_s = 0.0
+        self.processes = ProcessManager(self)
         self.methods = {
             'ping': self.methodPing,
             'system.info': self.methodSystemInfo,
@@ -751,13 +1093,26 @@ class Daemon:
             'subscribe': self.methodSubscribe,
             'workspace.status': self.methodWorkspaceStatus,
             'vm.status': self.methodVmStatus,
+            'process.start': self.methodProcessStart,
+            'process.stop': self.methodProcessStop,
+            'process.list': self.methodProcessList,
+            'process.output': self.methodProcessOutput,
+            'process.watch': self.methodProcessWatch,
+            'file.write': self.methodFileWrite,
             'agent.shutdown': self.methodShutdown,
         }
 
     def isIdle(self):
         '''True when no hub-started processes are running, so the daemon
         can be restarted (e.g. to update it) without disturbing anything.'''
-        return True
+        return self.processes.numRunning() == 0
+
+    def broadcast(self, event, data, only_watchers=False):
+        message = {'event': event, 'data': data}
+        for session in list(self.sessions):
+            if only_watchers and not session.watches_output:
+                continue
+            asyncio.ensure_future(session.send(message))
 
     def hello(self):
         return {
@@ -804,6 +1159,41 @@ class Daemon:
         return await asyncio.get_running_loop().run_in_executor(
             None, vmStatus, params['csm_vm_path'])
 
+    async def methodProcessStart(self, session, params):
+        '''params: process_id, argv, cwd, env, label, meta (returned as is;
+        the hub keeps its run information there).'''
+        return self.processes.start(params)
+
+    async def methodProcessStop(self, session, params):
+        process = self.processes.get(params['process_id'])
+        process.stop(float(params.get('grace_s', DEFAULT_STOP_GRACE_S)))
+        return process.record()
+
+    async def methodProcessList(self, session, params):
+        return [process.record()
+                for process in self.processes.processes.values()]
+
+    async def methodProcessOutput(self, session, params):
+        process = self.processes.get(params['process_id'])
+        return process.output(int(params.get('from_line', 0)))
+
+    async def methodProcessWatch(self, session, params):
+        session.watches_output = bool(params.get('enabled', True))
+        return {'watching': session.watches_output}
+
+    async def methodFileWrite(self, session, params):
+        '''Write a small text file (e.g. a launch overlay). Returns its
+        absolute path.'''
+        path = os.path.abspath(os.path.expanduser(params['path']))
+        directory = os.path.dirname(path)
+        if not os.path.isdir(directory):
+            raise RuntimeError('directory does not exist: ' + directory)
+        temporary_path = path + '.tmp'
+        with open(temporary_path, 'w') as file:
+            file.write(params['content'])
+        os.replace(temporary_path, path)
+        return {'path': path}
+
     async def methodShutdown(self, session, params):
         if not self.isIdle() and not params.get('force'):
             return {'stopping': False, 'reason': 'busy'}
@@ -831,8 +1221,8 @@ class Daemon:
             loop.add_signal_handler(signal_number, self.stop_event.set)
 
         server = await asyncio.start_unix_server(
-            self.handleClient, path=SOCKET_PATH, limit=16 * 1024 * 1024)
-        os.chmod(SOCKET_PATH, 0o600)
+            self.handleClient, path=SOCKET_NAME, limit=16 * 1024 * 1024)
+        os.chmod(SOCKET_NAME, 0o600)
         log('daemon %s listening on %s' % (AGENT_HASH, SOCKET_PATH))
 
         await self.stop_event.wait()
@@ -876,6 +1266,7 @@ def acquireDaemonLock():
 
 def runDaemon():
     os.makedirs(AGENT_DIR, mode=0o700, exist_ok=True)
+    os.chdir(AGENT_DIR)
     os.umask(0o077)
     lock_file = acquireDaemonLock()
     if lock_file is None:
@@ -885,13 +1276,13 @@ def runDaemon():
         paths = os.environ.get('PATH', '').split(':')
         os.environ['PATH'] = ':'.join(
             [path for path in MACOS_EXTRA_PATHS if path not in paths] + paths)
-    if os.path.exists(SOCKET_PATH):
-        os.unlink(SOCKET_PATH)
+    if os.path.exists(SOCKET_NAME):
+        os.unlink(SOCKET_NAME)
     try:
         asyncio.run(Daemon().serve())
     finally:
-        if os.path.exists(SOCKET_PATH):
-            os.unlink(SOCKET_PATH)
+        if os.path.exists(SOCKET_NAME):
+            os.unlink(SOCKET_NAME)
         lock_file.close()
     return 0
 
@@ -899,7 +1290,7 @@ def runDaemon():
 def connectToDaemon():
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        connection.connect(SOCKET_PATH)
+        connection.connect(SOCKET_NAME)
     except OSError:
         connection.close()
         return None
@@ -968,6 +1359,8 @@ def bridge(connection):
 
 
 def runAttach():
+    os.makedirs(AGENT_DIR, mode=0o700, exist_ok=True)
+    os.chdir(AGENT_DIR)
     connection = connectToDaemon()
     if connection is None:
         startDaemonProcess()

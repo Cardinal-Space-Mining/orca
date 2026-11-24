@@ -39,21 +39,44 @@ DEPLOY_COMMAND = (
     'mv "$HOME/.csm-hub/agent.py.new" ' + AGENT_REMOTE_PATH)
 
 
-def sshBaseCommand(route: Route, machines_by_id: dict) -> list:
-    '''ssh and its options for a route, without the target or command.'''
+def sshBaseCommand(route: Route, jumpRouteFor) -> list:
+    '''ssh and its options for a route, without the target or command.
+    jumpRouteFor(machine_id) gives the route to jump through for `via`
+    (normally the one that machine is connected on right now).'''
     command = ['ssh', '-T'] + SSH_OPTIONS
     if route.port:
         command += ['-p', str(route.port)]
     if route.host_key_alias:
         command += ['-o', 'HostKeyAlias=' + route.host_key_alias]
     if route.via:
-        jump_route = machines_by_id[route.via].routes[0]
-        jump_command = (sshBaseCommand(jump_route, machines_by_id)
+        jump_route = jumpRouteFor(route.via)
+        jump_command = (sshBaseCommand(jump_route, jumpRouteFor)
                         + ['-W', '%h:%p', jump_route.target()])
         command += ['-o', 'ProxyCommand=' + shlex.join(jump_command)]
     return command
 
 
-def sshCommand(route: Route, machines_by_id: dict, remote_command: str) -> list:
-    return (sshBaseCommand(route, machines_by_id)
+def sshCommand(route: Route, jumpRouteFor, remote_command: str) -> list:
+    return (sshBaseCommand(route, jumpRouteFor)
             + [route.target(), remote_command])
+
+
+def keyscanCommand(route: Route, jumpRouteFor) -> list:
+    '''Read a route's host keys. For a jump route, ssh-keyscan runs on the
+    machine jumped through, since only it can reach the address.'''
+    keyscan = ['ssh-keyscan', '-T', '5']
+    if route.port:
+        keyscan += ['-p', str(route.port)]
+    keyscan.append(route.host)
+    if not route.via:
+        return keyscan
+    jump_route = jumpRouteFor(route.via)
+    return sshCommand(jump_route, jumpRouteFor, shlex.join(keyscan))
+
+
+def knownHostsName(route: Route) -> str:
+    '''The name a route's key is checked under in known_hosts.'''
+    name = route.host_key_alias or route.host
+    if route.port and route.port != 22:
+        return '[%s]:%d' % (name, route.port)
+    return name

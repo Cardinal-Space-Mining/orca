@@ -11,12 +11,14 @@ from __future__ import annotations
 import asyncio
 import collections
 import json
+import os
 import sys
 import time
 from typing import Optional
 
 from .inventory import Machine, Route
-from .ssh import ATTACH_COMMAND, DEPLOY_COMMAND, sshCommand
+from .ssh import (ATTACH_COMMAND, DEPLOY_COMMAND, keyscanCommand,
+                  knownHostsName, sshCommand)
 
 
 FIRST_EVENT_TIMEOUT_S = 20.0
@@ -28,10 +30,33 @@ PING_PERIOD_S = 5.0
 VM_PERIOD_S = 5.0
 WORKSPACE_PERIOD_S = 30.0
 STREAM_LIMIT_BYTES = 16 * 1024 * 1024
+ROUTE_STAGGER_S = 0.4
+MIRROR_LINES = 5000
 
 
 class AgentError(Exception):
     '''The agent answered a request with an error.'''
+
+
+# SSH's error messages, shortened for the machine cards (most specific first).
+SSH_REASONS = [
+    ('Host key verification failed', 'unknown host key'),
+    ('REMOTE HOST IDENTIFICATION HAS CHANGED', 'host key changed'),
+    ('Permission denied', 'key not accepted'),
+    ('Network is unreachable', 'network unreachable'),
+    ('No route to host', 'no route'),
+    ('Connection timed out', 'timed out'),
+    ('Connection refused', 'SSH refused'),
+    ('Could not resolve hostname', 'name not found'),
+    ('Connection closed', 'connection closed'),
+]
+
+
+def shortReason(error) -> str:
+    for pattern, reason in SSH_REASONS:
+        if pattern in (error or ''):
+            return reason
+    return error or 'no response'
 
 
 
@@ -150,23 +175,78 @@ class AgentConnection:
 
 
 
+# --- Process output mirror ----------------------------------------------------
+
+
+
+class ProcessMirror:
+    """The hub's copy of one agent process: its latest record and recent
+    output lines, numbered as the agent numbers them."""
+
+    def __init__(self, record: dict):
+        self.record = record
+        self.lines = collections.deque(maxlen=MIRROR_LINES)
+        self.first_line_number = 0
+
+    def nextLineNumber(self) -> int:
+        return self.first_line_number + len(self.lines)
+
+    def merge(self, first: int, lines: list):
+        """Add a block of lines, which may overlap what's already here (live
+        events and a backlog fetch can cross)."""
+        end = first + len(lines)
+        mine_first = self.first_line_number
+        mine_end = self.nextLineNumber()
+        if not self.lines or first > mine_end:
+            combined_first, combined = first, list(lines)
+        elif end < mine_first:
+            return  # older than anything kept
+        elif first == mine_end:
+            combined_first, combined = mine_first, None  # plain append
+        else:
+            combined_first = min(first, mine_first)
+            combined = list(lines[:max(0, mine_first - first)])
+            combined.extend(self.lines)
+            if end > mine_end:
+                combined.extend(lines[mine_end - first:])
+        if combined is None:
+            overflow = max(0, len(self.lines) + len(lines) - MIRROR_LINES)
+            self.lines.extend(lines)
+            self.first_line_number += overflow
+            return
+        overflow = max(0, len(combined) - MIRROR_LINES)
+        self.first_line_number = combined_first + overflow
+        self.lines = collections.deque(combined[overflow:],
+                                       maxlen=MIRROR_LINES)
+
+    def output(self, from_line: int) -> dict:
+        start = max(from_line, self.first_line_number)
+        lines = list(self.lines)[start - self.first_line_number:]
+        return {'first_line_number': start, 'lines': lines,
+                'next_line_number': self.nextLineNumber()}
+
+
+
 # --- Machine link -------------------------------------------------------------
 
 
 
 class MachineLink:
-    '''Keeps the hub connected to one machine and holds its latest state.'''
+    """Keeps the hub connected to one machine and holds its latest state."""
 
     def __init__(self, hub, machine: Machine):
         self.hub = hub
         self.machine = machine
         self.connection: Optional[AgentConnection] = None
+        self.active_route: Optional[Route] = None
         self.wake_event = asyncio.Event()
+        self.processes = {}  # process id -> ProcessMirror
         self.state = {
             'connection': {'state': 'idle', 'route': None, 'error': None,
                            'since_s': time.time(), 'retry_at_s': None,
                            'rtt_ms': None, 'clock_offset_ms': None,
-                           'agent_hash': None, 'update_pending': False},
+                           'agent_hash': None, 'update_pending': False,
+                           'unknown_host_key': None, 'error_details': None},
             'info': None,
             'stats': None,
             'workspace': None,
@@ -189,10 +269,21 @@ class MachineLink:
         self.publish()
 
     def requestReconnect(self):
-        '''Drop the current connection (if any) and retry immediately.'''
+        """Drop the current connection (if any) and retry immediately."""
         self.wake_event.set()
         if self.connection is not None:
             asyncio.ensure_future(self.connection.close())
+
+    def jumpRoute(self) -> Route:
+        """Route for other machines to jump through: the live one if
+        connected, else the first listed."""
+        return self.active_route or self.machine.routes[0]
+
+    async def call(self, method: str, params: Optional[dict] = None,
+                   timeout_s: float = CALL_TIMEOUT_S):
+        if self.connection is None:
+            raise ConnectionError(self.machine.label + ' is not connected')
+        return await self.connection.call(method, params, timeout_s)
 
     # --- Main loop ---
 
@@ -216,40 +307,118 @@ class MachineLink:
 
     async def connectAnyRoute(self) -> bool:
         routes = self.machine.routes or [None]  # None: the local machine
-        for route in routes:
-            self.setConnection(
-                state='connecting', retry_at_s=None,
-                route=route.describe() if route else 'local')
-            connection = await self.open(route)
-            if connection is not None:
-                self.connection = connection
-                return True
-        return False
+        self.setConnection(
+            state='connecting', retry_at_s=None, unknown_host_key=None,
+            route=self.describeRoutes(routes))
+        winner = await self.firstReachable(routes)
+        if winner is None:
+            return False
+        route, connection, first = winner
+        self.setConnection(route=route.describe() if route else 'local')
+        connection = await self.open(route, connection, first)
+        if connection is None:
+            return False
+        self.connection = connection
+        self.active_route = route
+        return True
+
+    @staticmethod
+    def describeRoutes(routes) -> str:
+        if routes == [None]:
+            return 'local'
+        if len(routes) == 1:
+            return routes[0].describe()
+        return 'trying %d routes' % len(routes)
+
+    # --- Choosing a route ---
+
+    async def firstReachable(self, routes):
+        """Try every route, each a little after the previous one so earlier
+        (preferred) routes win when several work. Returns (route, connection,
+        first event) for the first route whose agent answers, or None."""
+        attempts = [asyncio.ensure_future(self.probe(route, index))
+                    for index, route in enumerate(routes)]
+        winner = None
+        errors = []
+        pending = set(attempts)
+        while pending and winner is None:
+            done, pending = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in sorted(done, key=attempts.index):
+                route, connection, first, error = task.result()
+                if connection is not None and winner is None:
+                    winner = (route, connection, first)
+                elif connection is not None:
+                    await connection.close()
+                else:
+                    errors.append((route, error))
+        for task in pending:
+            task.cancel()
+        if winner is None:
+            self.recordRouteErrors(errors)
+        return winner
+
+    async def probe(self, route: Optional[Route], index: int):
+        await asyncio.sleep(index * ROUTE_STAGGER_S)
+        try:
+            connection = await AgentConnection.start(
+                self.attachCommand(route), self.onEvent)
+        except OSError as error:
+            return route, None, None, 'could not start ssh: %s' % error
+        try:
+            first = await connection.waitFirstEvent(FIRST_EVENT_TIMEOUT_S)
+        except asyncio.CancelledError:
+            await connection.close()
+            raise
+        if first is None:
+            await asyncio.sleep(0.2)  # let stderr catch up
+            error = connection.lastError() or 'no response from agent'
+            await connection.close()
+            return route, None, None, error
+        return route, connection, first, None
+
+    def recordRouteErrors(self, errors):
+        unknown_key = next((route for route, error in errors
+                            if route and 'Host key verification failed'
+                            in (error or '')), None)
+        reasons = ['%s: %s' % (route.host if route else 'local',
+                               shortReason(error))
+                   for route, error in errors]
+        details = '\n'.join('%s: %s' % (
+            route.describe() if route else 'local', error)
+            for route, error in errors)
+        self.setConnection(
+            error=' · '.join(reasons), error_details=details,
+            unknown_host_key=unknown_key.describe() if unknown_key else None)
 
     def attachCommand(self, route: Optional[Route]) -> list:
         if route is None:
             return [sys.executable, '-u', self.hub.agent_path, 'attach']
-        return sshCommand(route, self.hub.machines_by_id, ATTACH_COMMAND)
+        return sshCommand(route, self.hub.jumpRouteFor, ATTACH_COMMAND)
 
-    async def open(self, route: Optional[Route]):
-        '''Connect through one route, installing or restarting the agent as
-        needed. Returns a ready connection, or None (error recorded).'''
+    # --- Agent install and update ---
+
+    async def open(self, route, connection, first):
+        """Turn a reachable route into a ready connection, installing or
+        restarting the agent as needed. Returns None on failure (error
+        recorded)."""
         for _ in range(3):
-            connection = await AgentConnection.start(
-                self.attachCommand(route), self.onEvent)
-            first = await connection.waitFirstEvent(FIRST_EVENT_TIMEOUT_S)
             action = await self.checkFirstEvent(first, connection, route)
             if action == 'ready':
                 return connection
             await connection.close()
             if action == 'failed':
                 return None
+            connection = await AgentConnection.start(
+                self.attachCommand(route), self.onEvent)
+            first = await connection.waitFirstEvent(FIRST_EVENT_TIMEOUT_S)
+        await connection.close()
         self.setConnection(error='agent did not come up after updating')
         return None
 
     async def checkFirstEvent(self, first, connection, route) -> str:
-        '''Decide what to do after the agent's first message:
-        "ready", "retry" (agent was installed or restarted), or "failed".'''
+        """Decide what to do after the agent's first message:
+        "ready", "retry" (agent was installed or restarted), or "failed"."""
         if first is None:
             await asyncio.sleep(0.2)  # let stderr catch up
             self.setConnection(
@@ -270,12 +439,13 @@ class MachineLink:
         return await self.updateAgent(hello, connection, route)
 
     async def updateAgent(self, hello, connection, route) -> str:
-        '''The agent runs different code than the hub's copy: replace the file
-        if it differs, then restart the daemon unless it's busy.'''
+        """The agent runs different code than the hub's copy: replace the file
+        if it differs, then restart the daemon unless it's busy."""
         if route is not None and hello['file_hash'] != self.hub.agent_hash:
             if not await self.deploy(route):
                 return 'failed'
         if not hello['is_idle']:
+            # Running processes belong to this daemon; update it later.
             self.setConnection(agent_hash=hello['agent_hash'],
                                update_pending=True, error=None)
             return 'ready'
@@ -295,7 +465,7 @@ class MachineLink:
             return True
         self.setConnection(state='installing agent')
         process = await asyncio.create_subprocess_exec(
-            *sshCommand(route, self.hub.machines_by_id, DEPLOY_COMMAND),
+            *sshCommand(route, self.hub.jumpRouteFor, DEPLOY_COMMAND),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE)
         try:
@@ -311,17 +481,66 @@ class MachineLink:
             return False
         return True
 
+    # --- Host keys ---
+
+    def unknownKeyRoute(self) -> Optional[Route]:
+        described = self.state['connection']['unknown_host_key']
+        return next((route for route in self.machine.routes
+                     if route.describe() == described), None)
+
+    async def scanHostKey(self) -> dict:
+        """Fetch the host keys of the route that failed verification, for the
+        user to compare before trusting them."""
+        route = self.unknownKeyRoute()
+        if route is None:
+            raise ValueError('no route is waiting for a host key')
+        process = await asyncio.create_subprocess_exec(
+            *keyscanCommand(route, self.hub.jumpRouteFor),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        output, _ = await asyncio.wait_for(process.communicate(), 20.0)
+        keys = [line for line in output.decode().splitlines()
+                if line and not line.startswith('#')]
+        if not keys:
+            raise ValueError('could not read host keys from ' + route.host)
+        fingerprint = await asyncio.create_subprocess_exec(
+            'ssh-keygen', '-l', '-f', '-', stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE)
+        fingerprints, _ = await fingerprint.communicate(
+            '\n'.join(keys).encode() + b'\n')
+        return {'route': route.describe(), 'name': knownHostsName(route),
+                'keys': keys,
+                'fingerprints': fingerprints.decode().splitlines()}
+
+    async def trustHostKey(self, expected_fingerprints: list) -> None:
+        """Add the scanned keys to ~/.ssh/known_hosts under the route's name,
+        but only if they're still the ones the user saw."""
+        scanned = await self.scanHostKey()
+        if sorted(scanned['fingerprints']) != sorted(expected_fingerprints):
+            raise ValueError('the host keys changed since they were shown')
+        name = scanned['name']
+        lines = []
+        for key in scanned['keys']:
+            _, key_type, key_data = key.split(None, 2)
+            lines.append('%s %s %s\n' % (name, key_type, key_data))
+        known_hosts = os.path.expanduser('~/.ssh/known_hosts')
+        os.makedirs(os.path.dirname(known_hosts), mode=0o700, exist_ok=True)
+        with open(known_hosts, 'a') as file:
+            file.writelines(lines)
+        self.requestReconnect()
+
     # --- While connected ---
 
     async def serve(self):
         connection = self.connection
-        self.setConnection(state='online', error=None)
+        self.setConnection(state='online', error=None, error_details=None,
+                           unknown_host_key=None)
         tasks = [asyncio.ensure_future(task) for task in self.pollTasks()]
         try:
             self.state['info'] = await connection.call('system.info')
             await connection.call(
                 'subscribe', {'stats_interval_s': STATS_INTERVAL_S})
             self.publish()
+            await self.syncProcesses(connection)
             await connection.closed.wait()
         except (AgentError, ConnectionError, asyncio.TimeoutError) as error:
             self.setConnection(error=str(error) or type(error).__name__)
@@ -333,6 +552,21 @@ class MachineLink:
             if not self.state['connection']['error']:
                 self.setConnection(
                     error=connection.lastError() or 'connection lost')
+
+    async def syncProcesses(self, connection):
+        """Catch up after (re)connecting: watch live output first, then fetch
+        whatever was printed while the hub was away."""
+        await connection.call('process.watch', {'enabled': True})
+        for record in await connection.call('process.list'):
+            self.onProcessState(record)
+            mirror = self.processes[record['process_id']]
+            backlog = await connection.call('process.output', {
+                'process_id': record['process_id'],
+                'from_line': mirror.nextLineNumber()})
+            self.onProcessOutput({
+                'process_id': record['process_id'],
+                'first_line_number': backlog['first_line_number'],
+                'lines': backlog['lines']})
 
     def pollTasks(self) -> list:
         tasks = [self.poll(PING_PERIOD_S, self.measureLatency)]
@@ -352,7 +586,7 @@ class MachineLink:
 
     async def measureLatency(self):
         sent_s = time.time()
-        reply = await self.connection.call('ping')
+        reply = await self.call('ping')
         received_s = time.time()
         # Assumes the request and the reply take equally long, as NTP does.
         offset_s = reply['time_s'] - (sent_s + received_s) / 2.0
@@ -360,16 +594,37 @@ class MachineLink:
                            clock_offset_ms=offset_s * 1000.0)
 
     async def refreshWorkspace(self):
-        self.state['workspace'] = await self.connection.call(
+        self.state['workspace'] = await self.call(
             'workspace.status', {'path': self.machine.workspace})
         self.publish()
 
     async def refreshVm(self):
-        self.state['vm'] = await self.connection.call(
+        self.state['vm'] = await self.call(
             'vm.status', {'csm_vm_path': self.machine.vm.csm_vm_path})
         self.publish()
+
+    # --- Agent events ---
 
     def onEvent(self, name: str, data):
         if name == 'stats':
             self.state['stats'] = data
             self.publish()
+        elif name == 'process.state':
+            self.onProcessState(data)
+        elif name == 'process.output':
+            self.onProcessOutput(data)
+
+    def onProcessState(self, record: dict):
+        mirror = self.processes.get(record['process_id'])
+        if mirror is None:
+            mirror = self.processes[record['process_id']] = \
+                ProcessMirror(record)
+        mirror.record = record
+        self.hub.onProcessState(self.machine.id, record)
+
+    def onProcessOutput(self, data: dict):
+        mirror = self.processes.get(data['process_id'])
+        if mirror is None or not data['lines']:
+            return
+        mirror.merge(data['first_line_number'], data['lines'])
+        self.hub.publish('output', dict(data, machine_id=self.machine.id))

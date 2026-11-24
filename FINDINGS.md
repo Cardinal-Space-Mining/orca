@@ -18,6 +18,10 @@ hub avoids it; the underlying issue is still there).
 | L5 | `lance/config/actions/redux.json` | Robot side's `client_hostname` is pinned to `ip.net1.dev_1`; pairing the robot with any other client needs a new preset. | open (hub addresses this) |
 | L6 | `run.sh` | No `trap`: if the script itself is interrupted or killed, `can_shutdown.sh` doesn't run. | open |
 | L7 | `sync.sh` | Sources its cache from `/tmp/last_lance_sync.conf`, a world-writable location (another local user could plant it). Low risk. | open |
+| L8 | `lance/config/presets/dev_presets.json` `lidar_dev_net1` | `pragma:action_overrides` sets `"foxglove_bride"` (typo for `foxglove_bridge`); the override is silently ignored, so `dev:=lidar_dev_net1`/`net2` start no Foxglove bridge. | open |
+| L9 | `lance/config/presets/gz_sim_presets.json` `gz_client` | `lance1/2_ucf_left` and `lance1/2_ucf_right` override `gz_sim`, but their parent `lance*_ksc` doesn't: choosing a UCF arena for the driver-station side also starts a simulator there (the config browser shows `gz_sim` enabled for `gz_client:=lance2_ucf_right`). Probably meant for `gz_robot`/`gz_full` only. | open |
+| L10 | `launch-utils/src/launch_utils/common.py` `resolve_json_imports` | Imports are queued in a `set` and popped in arbitrary order, while the README says earlier files take precedence on conflicts. No current files conflict, so nothing breaks today. | open |
+| L11 | `phoenix-driver/scripts/can_bringup.sh`, `can_shutdown.sh` | Call `sudo` internally. Started without a terminal (the hub, or any autostart), sudo fails at once ("a terminal is required"). The hub's machine setup doc gives a narrow NOPASSWD rule; a udev/systemd-networkd CAN setup would avoid sudo entirely. | open (documented in docs/machine-setup.md) |
 
 ## csm-vm
 

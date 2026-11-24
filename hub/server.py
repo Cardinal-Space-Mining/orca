@@ -7,6 +7,18 @@ Small HTTP server for the hub's web interface (standard library only).
     GET  /api/events                        Server-Sent Events: a "snapshot",
                                             then incremental updates
     POST /api/machines/<id>/reconnect       drop and retry a machine's link
+    GET  /api/machines/<id>/host-key        scan a route's unknown host key
+    POST /api/machines/<id>/host-key        trust it {"fingerprints": [...]}
+    GET  /api/machines/<id>/processes/<process>/output?from=N
+    POST /api/machines/<id>/processes/<process>/stop
+    GET  /api/scenarios                     scenarios and file errors
+    POST /api/plan                          plan a launch (nothing starts)
+    POST /api/runs                          launch
+    POST /api/runs/<id>/stop
+    POST /api/runs/<id>/dismiss             forget a finished run
+    GET  /api/config                        launch config actions and presets
+    GET  /api/config/preset?action=&preset= one preset, resolved
+    POST /api/config/resolve                {"arguments": {key: value}}
 
 Every response except the event stream closes its connection, which keeps the
 parser trivial. The server binds to localhost by default: the hub is meant to
@@ -20,15 +32,23 @@ import json
 import mimetypes
 import os
 from typing import Optional
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from .core import HUB_ROOT, Hub
+from .lance_config import ConfigError
+from .link import AgentError
+from .runs import PlanError
+from .scenarios import ScenarioError
 
 
 WEB_ROOT = os.path.join(HUB_ROOT, 'web')
 MAX_HEADER_LINES = 100
 MAX_BODY_BYTES = 1024 * 1024
 KEEPALIVE_PERIOD_S = 15.0
+
+# Errors a request can cause; reported to the browser as 400 + message.
+REQUEST_ERRORS = (PlanError, ConfigError, ScenarioError, AgentError,
+                  ConnectionError, asyncio.TimeoutError, ValueError, KeyError)
 
 STATUS_TEXT = {200: 'OK', 400: 'Bad Request', 404: 'Not Found',
                405: 'Method Not Allowed', 500: 'Internal Server Error'}
@@ -39,11 +59,19 @@ mimetypes.add_type('text/css', '.css')
 
 class Request:
 
-    def __init__(self, method: str, path: str, headers: dict, body: bytes):
+    def __init__(self, method: str, path: str, query: dict, headers: dict,
+                 body: bytes):
         self.method = method
         self.path = path
+        self.query = query
         self.headers = headers
         self.body = body
+
+    def json(self) -> dict:
+        return json.loads(self.body or b'{}')
+
+    def queryValue(self, name: str, default: str = '') -> str:
+        return self.query.get(name, [default])[0]
 
 
 
@@ -70,7 +98,9 @@ async def readRequest(reader: asyncio.StreamReader) -> Optional[Request]:
 
     length = min(int(headers.get('content-length', '0') or 0), MAX_BODY_BYTES)
     body = await reader.readexactly(length) if length else b''
-    return Request(method, unquote(urlsplit(target).path), headers, body)
+    parts = urlsplit(target)
+    return Request(method, unquote(parts.path), parse_qs(parts.query),
+                   headers, body)
 
 
 def writeResponse(writer, status: int, body: bytes, content_type: str):
@@ -131,18 +161,86 @@ class HttpServer:
 
     async def routeApi(self, request: Request, writer):
         parts = request.path.strip('/').split('/')[1:]  # drop "api"
-        if request.method == 'GET' and parts == ['state']:
-            writeJson(writer, 200, self.hub.snapshot())
-        elif request.method == 'GET' and parts == ['events']:
+        if request.method == 'GET' and parts == ['events']:
             await self.streamEvents(writer)
-        elif (request.method == 'POST' and len(parts) == 3
-              and parts[0] == 'machines' and parts[2] == 'reconnect'):
-            if self.hub.reconnect(parts[1]):
-                writeJson(writer, 200, {'ok': True})
-            else:
-                writeError(writer, 404, 'no such machine')
-        else:
+            return
+        try:
+            result = await self.answerApi(request, parts)
+        except REQUEST_ERRORS as error:
+            message = str(error) or type(error).__name__
+            if isinstance(error, KeyError):
+                message = 'missing ' + message
+            writeError(writer, 400, message)
+            return
+        if result is None:
             writeError(writer, 404, 'not found')
+        else:
+            writeJson(writer, 200, result)
+
+    async def answerApi(self, request: Request, parts: list):
+        """The JSON answer for an API request, or None if there's no such
+        endpoint."""
+        hub = self.hub
+        method = request.method
+        if method == 'GET' and parts == ['state']:
+            return hub.snapshot()
+        if parts[:1] == ['machines'] and len(parts) >= 3:
+            return await self.answerMachine(request, parts[1], parts[2:])
+        if method == 'GET' and parts == ['scenarios']:
+            scenarios, errors = hub.scenarios()
+            return {'scenarios': scenarios, 'errors': errors}
+        if method == 'POST' and parts == ['plan']:
+            return hub.plan(request.json())
+        if method == 'POST' and parts == ['runs']:
+            return hub.launch(request.json())
+        if method == 'POST' and len(parts) == 3 and parts[0] == 'runs':
+            if parts[2] == 'stop':
+                await hub.stopRun(parts[1])
+                return {'ok': True}
+            if parts[2] == 'dismiss':
+                hub.dismissRun(parts[1])
+                return {'ok': True}
+        if parts[:1] == ['config']:
+            return self.answerConfig(request, parts[1:])
+        return None
+
+    async def answerMachine(self, request: Request, machine_id: str,
+                            parts: list):
+        hub = self.hub
+        method = request.method
+        if method == 'POST' and parts == ['reconnect']:
+            hub.reconnect(machine_id)
+            return {'ok': True}
+        if parts == ['host-key']:
+            link = hub.link(machine_id)
+            if method == 'GET':
+                return await link.scanHostKey()
+            await link.trustHostKey(request.json()['fingerprints'])
+            return {'ok': True}
+        if len(parts) == 3 and parts[0] == 'processes':
+            process_id = parts[1]
+            if method == 'GET' and parts[2] == 'output':
+                return hub.processOutput(
+                    machine_id, process_id, int(request.queryValue('from', '0')))
+            if method == 'POST' and parts[2] == 'stop':
+                await hub.stopProcess(machine_id, process_id)
+                return {'ok': True}
+        return None
+
+    def answerConfig(self, request: Request, parts: list):
+        config = self.hub.lanceConfig()
+        if config is None:
+            raise ConfigError(self.hub.lance_config_error
+                              or 'the hub has no workspace')
+        if request.method == 'GET' and parts == []:
+            return {'actions': config.actions(),
+                    'path': config.config_path}
+        if request.method == 'GET' and parts == ['preset']:
+            return config.resolvePreset(request.queryValue('action'),
+                                        request.queryValue('preset'))
+        if request.method == 'POST' and parts == ['resolve']:
+            return config.resolve(request.json().get('arguments') or {})
+        return None
 
     def serveFile(self, writer, relative_path: str):
         full_path = os.path.realpath(os.path.join(WEB_ROOT, relative_path))

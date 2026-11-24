@@ -9,14 +9,19 @@ import { MachinesView } from './js/machines.js';
 import { LaunchView } from './js/launch.js';
 import { RunsView, isRunActive } from './js/runs.js';
 import { ConfigView } from './js/config.js';
+import { DeployView } from './js/deploy.js';
+import { BagsView } from './js/bags.js';
+import { LogsView } from './js/logs.js';
 
 
 const TABS = [
     { id: 'machines', label: 'Machines' },
     { id: 'launch', label: 'Launch' },
     { id: 'runs', label: 'Runs' },
+    { id: 'deploy', label: 'Deploy' },
+    { id: 'bags', label: 'Bags' },
+    { id: 'logs', label: 'Logs' },
     { id: 'config', label: 'Config' },
-    { id: 'deploy', label: 'Deploy', soon: true },
     { id: 'network', label: 'Network', soon: true },
 ];
 
@@ -82,6 +87,18 @@ function Page({ state, location, navigate, now }) {
             return html`<${RunsView} state=${state}
                 selectedId=${location.detail}
                 onSelect=${(runId) => navigate('runs', runId)} now=${now} />`;
+        case 'deploy':
+            return html`<${DeployView} state=${state} now=${now}
+                onLaunched=${(runId) => navigate('runs', runId)} />`;
+        case 'bags':
+            return html`<${BagsView} state=${state}
+                selectedId=${location.detail}
+                onSelect=${(machineId) => navigate('bags', machineId)}
+                onLaunched=${(runId) => navigate('runs', runId)} />`;
+        case 'logs':
+            return html`<${LogsView} state=${state}
+                selectedId=${location.detail} now=${now}
+                onSelect=${(machineId) => navigate('logs', machineId)} />`;
         case 'config':
             return html`<${ConfigView} />`;
         default:

@@ -95,12 +95,16 @@ export function StatusDot({ state }) {
 // Render text with ANSI colour codes (ROS log levels, launch prefixes) as
 // spans.
 const ANSI_PATTERN = /\x1b\[([0-9;]*)m/g;
+// Other terminal escapes (hyperlinks, cursor and erase commands) that log
+// files can contain; live output arrives without them.
+const OTHER_ESCAPES = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-ln-z@`]/g;
 
 export function stripAnsi(text) {
-    return text.replace(ANSI_PATTERN, '');
+    return text.replace(OTHER_ESCAPES, '').replace(ANSI_PATTERN, '');
 }
 
-export function AnsiText({ text }) {
+export function AnsiText({ text: rawText }) {
+    const text = rawText.replace(OTHER_ESCAPES, '');
     const parts = [];
     let classes = [];
     let last = 0;

@@ -13,6 +13,7 @@ from typing import Optional
 
 from .inventory import Route
 from .lance_config import ConfigError, LanceConfig
+from .deploy import Deployer
 from .link import MachineLink
 from .runs import PlanError, Planner, Run, newRunId
 from .scenarios import loadScenarios
@@ -36,6 +37,7 @@ class Hub:
         self.subscribers = set()  # asyncio.Queue per browser event stream
         self.runs = {}  # run id -> Run
         self.planner = Planner(self)
+        self.deployer = Deployer(self)
         self.lance_config = None
         self.lance_config_error = None
 
@@ -59,6 +61,12 @@ class Hub:
         local = self.links_by_id.get('local')
         workspace = local.state['workspace'] if local else None
         return workspace.get('head') if workspace else None
+
+    def referenceFingerprint(self) -> Optional[str]:
+        '''Code fingerprint of the hub's own workspace.'''
+        local = self.links_by_id.get('local')
+        workspace = local.state['workspace'] if local else None
+        return workspace.get('fingerprint') if workspace else None
 
     def lanceConfig(self) -> Optional[LanceConfig]:
         if self.lance_config is None and self.workspace_root:
@@ -168,9 +176,23 @@ class Hub:
             if record['state'] == 'exited':
                 return  # an old run; nothing to recover
             run = Run(self, run_id, meta.get('run_label') or run_id,
-                      meta.get('scenario_id'))
+                      meta.get('scenario_id'), kind=meta.get('kind', 'launch'))
             self.runs[run_id] = run
         run.onProcessState(machine_id, record)
+
+    # --- Logs ---
+
+    async def listLogs(self, machine_id: str) -> list:
+        link = self.link(machine_id)
+        return await link.call('logs.list',
+                               {'workspace': link.machine.workspace})
+
+    async def readLog(self, machine_id: str, path: str,
+                      max_bytes: int) -> dict:
+        link = self.link(machine_id)
+        return await link.call('logs.read', {
+            'path': path, 'max_bytes': max_bytes,
+            'workspace': link.machine.workspace}, timeout_s=60.0)
 
     async def stopProcess(self, machine_id: str, process_id: str):
         await self.link(machine_id).call('process.stop',

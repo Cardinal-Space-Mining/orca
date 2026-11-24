@@ -16,6 +16,13 @@ Small HTTP server for the hub's web interface (standard library only).
     POST /api/runs                          launch
     POST /api/runs/<id>/stop
     POST /api/runs/<id>/dismiss             forget a finished run
+    POST /api/deploy/compare                {"machine_id"}: what a push changes
+    POST /api/deploy                        push and/or build (a run)
+    GET  /api/machines/<id>/bags            bags there, and whether pulled
+    POST /api/machines/<id>/bags/pull       {"names": [...]} (a run)
+    POST /api/machines/<id>/bags/delete     {"name"}, only once pulled
+    GET  /api/machines/<id>/logs            log files there
+    GET  /api/machines/<id>/logs/read?path=&max_bytes=[&download=1]
     GET  /api/config                        launch config actions and presets
     GET  /api/config/preset?action=&preset= one preset, resolved
     POST /api/config/resolve                {"arguments": {key: value}}
@@ -103,13 +110,16 @@ async def readRequest(reader: asyncio.StreamReader) -> Optional[Request]:
                    headers, body)
 
 
-def writeResponse(writer, status: int, body: bytes, content_type: str):
+def writeResponse(writer, status: int, body: bytes, content_type: str,
+                  extra_headers: str = ''):
     head = ('HTTP/1.1 %d %s\r\n'
             'Content-Type: %s\r\n'
             'Content-Length: %d\r\n'
             'Cache-Control: no-cache\r\n'
+            '%s'
             'Connection: close\r\n\r\n'
-            % (status, STATUS_TEXT.get(status, ''), content_type, len(body)))
+            % (status, STATUS_TEXT.get(status, ''), content_type, len(body),
+               extra_headers))
     writer.write(head.encode('latin-1') + body)
 
 
@@ -133,7 +143,15 @@ class HttpServer:
         self.hub = hub
 
     async def start(self, host: str, port: int):
-        return await asyncio.start_server(self.handle, host, port)
+        '''"localhost" listens on both loopback addresses: browsers often try
+        ::1 first and log a refused connection when only 127.0.0.1 answers.'''
+        if host != 'localhost':
+            return await asyncio.start_server(self.handle, host, port)
+        try:
+            return await asyncio.start_server(
+                self.handle, ['127.0.0.1', '::1'], port)
+        except OSError:  # no IPv6 on this machine
+            return await asyncio.start_server(self.handle, '127.0.0.1', port)
 
     async def handle(self, reader, writer):
         try:
@@ -165,6 +183,9 @@ class HttpServer:
             await self.streamEvents(writer)
             return
         try:
+            if request.queryValue('download') and parts[2:] == ['logs', 'read']:
+                await self.downloadLog(request, parts[1], writer)
+                return
             result = await self.answerApi(request, parts)
         except REQUEST_ERRORS as error:
             message = str(error) or type(error).__name__
@@ -202,6 +223,12 @@ class HttpServer:
                 return {'ok': True}
         if parts[:1] == ['config']:
             return self.answerConfig(request, parts[1:])
+        if method == 'POST' and parts == ['deploy', 'compare']:
+            body = request.json()
+            return await hub.deployer.compare(body['machine_id'],
+                                              body.get('delete', True))
+        if method == 'POST' and parts == ['deploy']:
+            return hub.deployer.deploy(request.json()).snapshot()
         return None
 
     async def answerMachine(self, request: Request, machine_id: str,
@@ -217,6 +244,21 @@ class HttpServer:
                 return await link.scanHostKey()
             await link.trustHostKey(request.json()['fingerprints'])
             return {'ok': True}
+        if parts[:1] == ['bags']:
+            if method == 'GET' and len(parts) == 1:
+                return await hub.deployer.listBags(machine_id)
+            if method == 'POST' and parts[1:] == ['pull']:
+                return hub.deployer.pullBags(
+                    machine_id, request.json()['names']).snapshot()
+            if method == 'POST' and parts[1:] == ['delete']:
+                return await hub.deployer.deleteBag(machine_id,
+                                                    request.json()['name'])
+        if method == 'GET' and parts == ['logs']:
+            return {'logs': await hub.listLogs(machine_id)}
+        if method == 'GET' and parts == ['logs', 'read']:
+            return await hub.readLog(
+                machine_id, request.queryValue('path'),
+                int(request.queryValue('max_bytes', str(1024 * 1024))))
         if len(parts) == 3 and parts[0] == 'processes':
             process_id = parts[1]
             if method == 'GET' and parts[2] == 'output':
@@ -226,6 +268,17 @@ class HttpServer:
                 await hub.stopProcess(machine_id, process_id)
                 return {'ok': True}
         return None
+
+    async def downloadLog(self, request: Request, machine_id: str, writer):
+        log = await self.hub.readLog(machine_id, request.queryValue('path'),
+                                     20 * 1024 * 1024)
+        name = '%s-%s' % (machine_id, os.path.basename(log['path']))
+        name = ''.join(character if character.isalnum() or character in '._-'
+                       else '_' for character in name)
+        writeResponse(writer, 200, log['text'].encode(),
+                      'text/plain; charset=utf-8',
+                      'Content-Disposition: attachment; filename="%s"\r\n'
+                      % name)
 
     def answerConfig(self, request: Request, parts: list):
         config = self.hub.lanceConfig()

@@ -39,6 +39,7 @@ import platform
 import plistlib
 import pty
 import re
+import shutil
 import signal
 import socket
 import struct
@@ -556,9 +557,10 @@ def workspaceStatus(path):
     '''Git and build state of a colcon workspace whose repo is <path>/src.'''
     root = os.path.expanduser(path)
     repository = os.path.join(root, 'src')
-    status = {'path': path, 'exists': os.path.isdir(repository)}
+    status = {'path': path, 'exists': os.path.isdir(repository),
+              'ros_distros': installedRosDistros()}
     if not status['exists']:
-        return status
+        return status  # a first deploy creates it
 
     head = git(repository, 'rev-parse', 'HEAD')
     status['is_git'] = head is not None
@@ -585,7 +587,289 @@ def workspaceStatus(path):
     status['has_install'] = os.path.isdir(os.path.join(root, 'install'))
     status['last_build_s'] = (os.stat(latest_build).st_mtime
                               if os.path.exists(latest_build) else None)
+    status['fingerprint'] = codeFingerprint(repository)
+    status['ros_distro'] = builtRosDistro(root)
+    usage = shutil.disk_usage(root)
+    status['disk'] = {'free_bytes': usage.free, 'total_bytes': usage.total}
     return status
+
+
+def workspaceRefs(path):
+    '''Every branch, tag and remote ref of <path>/src with its commit, so the
+    hub can tell whether a push would lose commits that only exist here.'''
+    repository = os.path.join(os.path.expanduser(path), 'src')
+    output = git(repository, 'for-each-ref',
+                 '--format=%(objectname) %(refname)') or ''
+    refs = {}
+    for line in output.splitlines():
+        sha, _, name = line.partition(' ')
+        refs[name] = sha
+    # Older stashes live only in the stash reflog.
+    stashes = git(repository, 'stash', 'list', '--format=%H %gd') or ''
+    for line in stashes.splitlines():
+        sha, _, name = line.partition(' ')
+        refs[name] = sha
+    # Refs kept as files survive a push (the hub never deletes inside .git);
+    # refs only in packed-refs don't, since that file gets replaced.
+    git_directory = git(repository, 'rev-parse', '--absolute-git-dir') or ''
+    loose = [name for name in refs if name.startswith('stash@')
+             or os.path.exists(os.path.join(git_directory, name))]
+    status = git(repository, 'status', '--porcelain=v1') or ''
+    return {'refs': refs, 'loose': loose, 'changes': [
+        line for line in status.splitlines() if line and not isNoise(line)]}
+
+
+def isNoise(status_line):
+    '''Files every run creates (Python caches) shouldn't make two copies of
+    the same code look different.'''
+    return '__pycache__' in status_line or status_line.endswith('.pyc')
+
+
+def codeFingerprint(repository):
+    '''Hash of the code as it is on disk: the commit, uncommitted changes
+    and untracked files, in the repo and its submodules. Two workspaces with
+    the same fingerprint run the same code, whatever their history.'''
+    digest = hashlib.sha256()
+    commands = [
+        ['rev-parse', 'HEAD'],
+        ['status', '--porcelain=v1', '--untracked-files=all'],
+        ['diff', 'HEAD'],
+        ['submodule', 'status', '--recursive'],
+        ['submodule', 'foreach', '--quiet', '--recursive',
+         'git diff HEAD; git status --porcelain=v1 --untracked-files=all'],
+    ]
+    for arguments in commands:
+        output = runCommand(['git', '-C', repository] + arguments,
+                            timeout_s=30) or ''
+        if 'status' in arguments or 'foreach' in arguments:
+            output = '\n'.join(line for line in output.splitlines()
+                               if not isNoise(line))
+        digest.update(output.encode())
+    # Untracked files count by content, not just by name (a new file that is
+    # edited after a deploy must make the copies differ).
+    for directory in [repository] + submoduleDirectories(repository):
+        digest.update(untrackedContentHashes(directory).encode())
+    return digest.hexdigest()[:12]
+
+
+def submoduleDirectories(repository):
+    output = git(repository, 'submodule', 'foreach', '--quiet',
+                 '--recursive', 'echo "$toplevel/$sm_path"') or ''
+    return [line for line in output.splitlines() if line]
+
+
+def untrackedContentHashes(directory, depth=0):
+    '''"path hash" for every untracked file. A nested repository that
+    isn't a submodule (git lists it as "name/") is summarized the same way
+    as the main one.'''
+    listing = git(directory, 'ls-files', '--others', '--exclude-standard')
+    entries = [path for path in (listing or '').splitlines()
+               if path and not isNoise(path)]
+    nested = [path for path in entries if path.endswith('/')]
+    paths = [path for path in entries if not path.endswith('/')
+             and os.path.isfile(os.path.join(directory, path))]
+    summaries = []
+    for path in nested:
+        if depth < 3:
+            summaries.append('%s {%s}' % (path, nestedRepositorySummary(
+                os.path.join(directory, path), depth + 1)))
+    if not paths:
+        return '\n'.join(summaries)
+    try:
+        completed = subprocess.run(
+            ['git', '-C', directory, 'hash-object', '--stdin-paths'],
+            input='\n'.join(paths) + '\n', capture_output=True, text=True,
+            timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return ''
+    hashes = ['%s %s' % pair for pair in
+              zip(paths, completed.stdout.splitlines())]
+    return '\n'.join(summaries + hashes)
+
+
+def nestedRepositorySummary(directory, depth):
+    parts = [git(directory, 'rev-parse', 'HEAD') or 'no commits',
+             git(directory, 'diff', 'HEAD') or '',
+             untrackedContentHashes(directory, depth)]
+    return hashlib.sha256('\n'.join(parts).encode()).hexdigest()[:12]
+
+
+def builtRosDistro(root):
+    '''The ROS distro the workspace was built against (colcon records the
+    underlay in install/setup.sh).'''
+    setup = readText(os.path.join(root, 'install', 'setup.sh')) or ''
+    match = re.search(r'/opt/ros/([A-Za-z]+)', setup)
+    return match.group(1) if match else None
+
+
+def installedRosDistros():
+    try:
+        return sorted(os.listdir('/opt/ros'))
+    except OSError:
+        return []
+
+
+
+# --- Bags ---------------------------------------------------------------------
+
+
+
+BAG_DIRECTORY = 'bag_recordings'
+
+
+def directorySize(path):
+    total = 0
+    for root, _, names in os.walk(path):
+        for name in names:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def bagInfo(path):
+    '''Summary of one rosbag2 directory from its metadata.yaml (read with
+    regular expressions: there is no YAML parser in the standard library).'''
+    metadata = readText(os.path.join(path, 'metadata.yaml')) or ''
+
+    def number(pattern):
+        match = re.search(pattern, metadata, re.MULTILINE)
+        return int(match.group(1)) if match else None
+
+    topics = re.findall(r'^\s+- topic_metadata:\s*\n\s+name:\s*(\S+)',
+                        metadata, re.MULTILINE)
+    storage = re.search(r'^  storage_identifier:\s*(\S+)', metadata,
+                        re.MULTILINE)
+    start_ns = number(r'^  starting_time:\s*\n\s+nanoseconds_since_epoch:'
+                      r'\s*(\d+)')
+    duration_ns = number(r'^  duration:\s*\n\s+nanoseconds:\s*(\d+)')
+    return {
+        'name': os.path.basename(path),
+        'size_bytes': directorySize(path),
+        'modified_s': os.stat(path).st_mtime,
+        'has_metadata': bool(metadata),
+        'storage': storage.group(1) if storage else None,
+        'start_s': start_ns / 1e9 if start_ns else None,
+        'duration_s': duration_ns / 1e9 if duration_ns is not None else None,
+        'message_count': number(r'^  message_count:\s*(\d+)'),
+        'topics': topics,
+    }
+
+
+def listBags(workspace):
+    root = os.path.expanduser(workspace)
+    directory = os.path.join(root, BAG_DIRECTORY)
+    bags = []
+    if os.path.isdir(directory):
+        for name in sorted(os.listdir(directory)):
+            path = os.path.join(directory, name)
+            if os.path.isdir(path):
+                bags.append(bagInfo(path))
+    usage = shutil.disk_usage(root if os.path.isdir(root) else '/')
+    return {'directory': directory, 'bags': bags,
+            'disk': {'free_bytes': usage.free, 'total_bytes': usage.total}}
+
+
+def deleteBag(workspace, name):
+    if not name or '/' in name or name.startswith('.'):
+        raise ValueError('not a bag name: ' + str(name))
+    path = os.path.join(os.path.expanduser(workspace), BAG_DIRECTORY, name)
+    if not os.path.isdir(path):
+        raise ValueError('no bag ' + name)
+    shutil.rmtree(path)
+    return {'deleted': name}
+
+
+
+# --- Logs ---------------------------------------------------------------------
+
+
+
+MAX_LOG_READ_BYTES = 20 * 1024 * 1024
+ROS_LOG_DIRECTORY = os.path.join(os.path.expanduser('~'), '.ros', 'log')
+VM_LOG_PATH = '/var/log/run-vm.log'
+NUM_RECENT_ROS_LOGS = 60
+NUM_RECENT_BUILDS = 4
+
+
+def logEntry(path, group, label=None):
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return {'path': path, 'group': group,
+            'label': label or os.path.basename(path),
+            'size_bytes': stat.st_size, 'modified_s': stat.st_mtime}
+
+
+def buildLogs(workspace):
+    '''Each package's newest build log. build.sh runs colcon twice (lance on
+    its own), so latest_build alone only has lance's.'''
+    builds = sorted(glob.glob(os.path.join(
+        os.path.expanduser(workspace), 'log', 'build_*')), reverse=True)
+    entries = []
+    seen = set()
+    for build in builds[:NUM_RECENT_BUILDS]:
+        for path in glob.glob(os.path.join(build, '*', 'stdout_stderr.log')):
+            package = os.path.basename(os.path.dirname(path))
+            if package not in seen:
+                seen.add(package)
+                entries.append(logEntry(path, 'Latest build', package))
+    if builds:
+        entries.append(logEntry(os.path.join(builds[0], 'events.log'),
+                                'Latest build', 'colcon events'))
+    return entries
+
+
+def logRoots(workspace):
+    roots = [AGENT_DIR, ROS_LOG_DIRECTORY, VM_LOG_PATH]
+    if workspace:
+        roots.append(os.path.join(os.path.expanduser(workspace), 'log'))
+    return [os.path.realpath(root) for root in roots]
+
+
+def listLogs(workspace):
+    '''Logs worth looking at on this machine, newest first per group.'''
+    entries = []
+    for path in glob.glob(os.path.join(RUNS_DIR, '*', '*.log')):
+        run = os.path.basename(os.path.dirname(path))
+        process = os.path.basename(path)[:-len('.log')]
+        if process.startswith(run + '.'):
+            process = process[len(run) + 1:]
+        entries.append(logEntry(path, 'Hub runs', '%s  %s' % (run, process)))
+    if workspace:
+        entries.extend(buildLogs(workspace))
+    ros_logs = glob.glob(os.path.join(ROS_LOG_DIRECTORY, '*.log')) + glob.glob(
+        os.path.join(ROS_LOG_DIRECTORY, '*', 'launch.log'))
+    ros_logs.sort(key=lambda path: os.stat(path).st_mtime, reverse=True)
+    for path in ros_logs[:NUM_RECENT_ROS_LOGS]:
+        label = os.path.relpath(path, ROS_LOG_DIRECTORY)
+        entries.append(logEntry(path, 'ROS', label))
+    entries.append(logEntry(LOG_PATH, 'Agent', 'agent.log'))
+    if IS_MACOS:
+        entries.append(logEntry(VM_LOG_PATH, 'VM', 'run-vm.log (autostart)'))
+    entries = [entry for entry in entries if entry]
+    entries.sort(key=lambda entry: entry['modified_s'], reverse=True)
+    return entries
+
+
+def readLog(path, max_bytes, workspace):
+    '''The end of a log file (at most max_bytes), from the known log
+    locations only.'''
+    real_path = os.path.realpath(os.path.expanduser(path))
+    if not any(real_path == root or real_path.startswith(root + os.sep)
+               for root in logRoots(workspace)):
+        raise ValueError('not a log location: ' + path)
+    max_bytes = min(int(max_bytes), MAX_LOG_READ_BYTES)
+    size = os.path.getsize(real_path)
+    with open(real_path, 'rb') as file:
+        if size > max_bytes:
+            file.seek(size - max_bytes)
+            file.readline()  # drop the partial first line
+        data = file.read()
+    return {'path': path, 'size_bytes': size, 'truncated': size > max_bytes,
+            'text': data.decode('utf-8', errors='replace')}
 
 
 
@@ -688,6 +972,10 @@ def vmStatus(csm_vm_path):
 
 
 CONTROL_CHARACTERS = re.compile(r'[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f]')
+# Terminal escapes other than colours: OSC sequences (GCC's hyperlinks) and
+# cursor/erase commands (CMake's "\x1b[K").
+OSC_SEQUENCE = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
+NON_COLOUR_CSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-ln-z@`]')
 
 
 def cleanLine(text):
@@ -697,6 +985,8 @@ def cleanLine(text):
     text = text.rstrip('\r')
     if '\r' in text:
         text = text.rsplit('\r', 1)[1]
+    text = OSC_SEQUENCE.sub('', text)
+    text = NON_COLOUR_CSI.sub('', text)
     text = CONTROL_CHARACTERS.sub('', text)
     return text[:MAX_LINE_CHARACTERS]
 
@@ -1099,6 +1389,11 @@ class Daemon:
             'process.output': self.methodProcessOutput,
             'process.watch': self.methodProcessWatch,
             'file.write': self.methodFileWrite,
+            'workspace.refs': self.methodWorkspaceRefs,
+            'bags.list': self.methodBagsList,
+            'bags.delete': self.methodBagsDelete,
+            'logs.list': self.methodLogsList,
+            'logs.read': self.methodLogsRead,
             'agent.shutdown': self.methodShutdown,
         }
 
@@ -1193,6 +1488,28 @@ class Daemon:
             file.write(params['content'])
         os.replace(temporary_path, path)
         return {'path': path}
+
+    async def inThread(self, function, *arguments):
+        return await asyncio.get_running_loop().run_in_executor(
+            None, function, *arguments)
+
+    async def methodWorkspaceRefs(self, session, params):
+        return await self.inThread(workspaceRefs, params['path'])
+
+    async def methodBagsList(self, session, params):
+        return await self.inThread(listBags, params['workspace'])
+
+    async def methodBagsDelete(self, session, params):
+        return await self.inThread(deleteBag, params['workspace'],
+                                   params['name'])
+
+    async def methodLogsList(self, session, params):
+        return await self.inThread(listLogs, params.get('workspace'))
+
+    async def methodLogsRead(self, session, params):
+        return await self.inThread(
+            readLog, params['path'], params.get('max_bytes', 1024 * 1024),
+            params.get('workspace'))
 
     async def methodShutdown(self, session, params):
         if not self.isIdle() and not params.get('force'):

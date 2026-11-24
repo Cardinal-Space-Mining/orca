@@ -1,8 +1,8 @@
 # CSM Hub
 
 One place to run the robot: which machines are up and what code they have,
-launching across several machines at once with live output, and browsing the
-launch config. A web app served by a small Python program on your laptop; it
+launching across several machines at once with live output, deploying and
+building code, pulling bags, reading logs, and browsing the launch config. A web app served by a small Python program on your laptop; it
 talks to each machine through SSH, so nothing on the robot listens on the
 network.
 
@@ -22,7 +22,10 @@ CAN permissions): [docs/machine-setup.md](docs/machine-setup.md).
 |---|---|
 | Machines | Every machine: connection, load, network (incl. Wi-Fi channel), workspace commit vs. yours, the VM on a mac host. |
 | Launch | Pick a scenario, assign machines to its roles, check the exact commands, launch. |
-| Runs | Everything launched, with live output per process (filter by text, level or node), stop all or one. |
+| Runs | Everything launched, deployed or pulled, with live output per process (filter by text, level or node), stop all or one. |
+| Deploy | Push this workspace's `src/` to other machines and build there; compare first to see exactly what changes. |
+| Bags | Recordings on each machine with length, size and topics; pull them here, delete them there once pulled. |
+| Logs | Hub run logs, each package's latest build log, ROS logs, the agent's and the VM autostart log, per machine. |
 | Config | Browse every action and preset of `lance/config`, what a preset inherits and enables, and try `key:=value` arguments without launching. |
 
 ## Machines
@@ -128,6 +131,34 @@ competition one, shortened:
   also saved on its machine under `~/.csm-hub/runs/<run>/` (20 MB cap per
   process, removed after 14 days).
 
+## Deploying
+
+The Deploy page replaces `sync.sh push --ws` (and the build you'd run after
+it over SSH):
+
+- **Same code, checked by content.** Each machine reports a *fingerprint* of
+  its workspace: the commit, uncommitted changes and the contents of
+  untracked files, in the repo and every submodule. Machines with the same
+  fingerprint run the same code whatever their git history. The Machines page
+  shows *same code as hub* / *different code*, and the launch page warns when
+  the robot and the driver station differ (net_adapter's codec needs both
+  sides deployed together).
+- **Compare** shows what a push would change (an rsync dry run): files
+  changed, new and deleted, and any work on the target a push would
+  overwrite (uncommitted changes there).
+- **Push** copies `src/` with sync.sh's rules (all of `src/` including `.git`,
+  never csm-sim; files deleted here are deleted there) and two differences:
+  nothing inside `.git` is ever deleted on the target, so commits, branches
+  and stashes that only exist there survive (sync.sh deletes them), and
+  Python caches aren't copied.
+- **Build** runs `./src/build.sh` on the target after its push succeeds, with
+  the ROS distro the workspace was built against, for both robots or one
+  (half the time). Pushes to several machines run in parallel.
+
+Bags are pulled into this workspace's `bag_recordings/` (like
+`sync.sh pull --bags`), resumably. Deleting a bag on the robot is only
+offered once an identical copy is here.
+
 ## How it works
 
 ```
@@ -162,8 +193,8 @@ competition one, shortened:
 |---|---|---|
 | 0 | Agent, inventory, machines view (status, network, workspace, VM) | done |
 | 1 | Scenarios and synchronized launch with output streaming; config browser; value overrides (IP pairing); host key trust | done |
-| 2 | Deploy (push, remote build, version checks), bags, logs | next |
-| 3 | VM control and serial console | |
+| 2 | Deploy (compare, push, remote build, code fingerprints), bags, logs | done |
+| 3 | VM control and serial console; editing the inventory in the app | next |
 | 4 | Network tools, bandwidth budget, competition mode | |
 | 5 | Native macOS processes | |
 

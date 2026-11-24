@@ -33,7 +33,7 @@ def parseArguments():
         prog='csm-hub', description='CSM robot management hub')
     parser.add_argument('--port', type=int, default=DEFAULT_PORT)
     parser.add_argument(
-        '--bind', default='127.0.0.1',
+        '--bind', default='localhost',
         help='address to serve the web interface on (default: localhost only)')
     parser.add_argument(
         '--workspace', default=None,
@@ -48,7 +48,7 @@ async def serve(arguments, workspace_root):
     hub = Hub(loadInventory(workspace_root), workspace_root, paths)
     server = await HttpServer(hub).start(arguments.bind, arguments.port)
     url = 'http://%s:%d/' % (
-        'localhost' if arguments.bind in ('127.0.0.1', '0.0.0.0')
+        'localhost' if arguments.bind in ('localhost', '127.0.0.1', '0.0.0.0')
         else arguments.bind, arguments.port)
     print('[CSM HUB]: serving on ' + url, flush=True)
     print('[CSM HUB]: workspace: ' + (workspace_root or 'none'), flush=True)

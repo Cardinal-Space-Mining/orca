@@ -154,16 +154,16 @@ function NetworkSection({ stats }) {
         </div>`;
 }
 
-function workspaceBadges(workspace, referenceHead, isReference) {
+// `reference` is the code fingerprint of the hub's own workspace.
+function workspaceBadges(workspace, reference, isReference) {
     const badges = [];
     if (isReference) {
         badges.push(html`<span class="pill accent">hub's copy</span>`);
-    } else if (referenceHead && workspace.head === referenceHead) {
-        badges.push(html`<span class="pill good">matches hub</span>`);
-    } else if (referenceHead) {
-        badges.push(html`<span class="pill warn"
-            title=${`hub is at ${shortCommit(referenceHead)}`}>
-            differs from hub</span>`);
+    } else if (reference && workspace.fingerprint === reference) {
+        badges.push(html`<span class="pill good">same code as hub</span>`);
+    } else if (reference) {
+        badges.push(html`<span class="pill warn" title="Deploy from the
+            Deploy page to make it match">different code</span>`);
     }
     if (workspace.num_changes > 0) {
         badges.push(html`<span class="pill warn">
@@ -176,7 +176,7 @@ function workspaceBadges(workspace, referenceHead, isReference) {
     return badges;
 }
 
-function WorkspaceSection({ path, workspace, referenceHead, isReference, now }) {
+function WorkspaceSection({ path, workspace, reference, isReference, now }) {
     let body;
     if (!workspace) {
         body = html`<span class="faint">reading…</span>`;
@@ -199,7 +199,7 @@ function WorkspaceSection({ path, workspace, referenceHead, isReference, now }) 
                     : html`<span class="pill warn">not built</span>`}</dd>
                 <dt>Status</dt>
                 <dd><div class="badges">${workspaceBadges(
-                    workspace, referenceHead, isReference)}</div></dd>
+                    workspace, reference, isReference)}</div></dd>
             </dl>`;
     }
     return html`
@@ -331,7 +331,7 @@ function OfflineNotice({ machineId, connection, now }) {
             machineId=${machineId} route=${connection.unknown_host_key} />`}`;
 }
 
-function MachineCard({ entry, machinesById, referenceHead, now }) {
+function MachineCard({ entry, machinesById, reference, now }) {
     const { machine, connection, info, stats, workspace, vm } = entry;
     const isOnline = connection.state === 'online';
     const hostEntry = machine.host && machinesById[machine.host];
@@ -358,12 +358,12 @@ function MachineCard({ entry, machinesById, referenceHead, now }) {
             <${OfflineNotice} machineId=${machine.id} connection=${connection}
                 now=${now} />
             ${!stats && !isOnline ? null : html`<${CardBody} entry=${entry}
-                guestEntry=${guestEntry} referenceHead=${referenceHead}
+                guestEntry=${guestEntry} reference=${reference}
                 now=${now} />`}
         </article>`;
 }
 
-function CardBody({ entry, guestEntry, referenceHead, now }) {
+function CardBody({ entry, guestEntry, reference, now }) {
     const { machine, connection, info, stats, workspace, vm } = entry;
     const isOnline = connection.state === 'online';
     return html`
@@ -371,7 +371,7 @@ function CardBody({ entry, guestEntry, referenceHead, now }) {
             ${stats && html`<${NetworkSection} stats=${stats} />`}
             ${machine.workspace && html`<${WorkspaceSection}
                 path=${machine.workspace} workspace=${workspace}
-                referenceHead=${referenceHead} isReference=${machine.is_local}
+                reference=${reference} isReference=${machine.is_local}
                 now=${now} />`}
             ${machine.vm && isOnline && html`<${VmSection} vm=${vm}
                 guestLabel=${guestEntry && guestEntry.machine.label} />`}`;
@@ -430,11 +430,11 @@ export function MachinesView({ state, now }) {
     const machinesById = Object.fromEntries(
         state.machines.map((entry) => [entry.machine.id, entry]));
     const local = machinesById.local;
-    const referenceHead = local && local.workspace && local.workspace.head;
+    const reference = local && local.workspace && local.workspace.fingerprint;
     const groups = groupMachines(state.machines, machinesById);
     const card = (entry) => html`<${MachineCard} key=${entry.machine.id}
         entry=${entry} machinesById=${machinesById}
-        referenceHead=${referenceHead} now=${now} />`;
+        reference=${reference} now=${now} />`;
     return html`
         <div class="page-head">
             <div>

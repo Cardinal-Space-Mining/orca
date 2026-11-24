@@ -37,7 +37,9 @@ Nothing else is installed by hand: the hub copies its agent to
   sudo loginctl enable-linger lance
   ```
 - **The workspace** at the path in `machines.json` (normally `~/lance-ws`),
-  built with `./src/build.sh`.
+  built with `./src/build.sh`. The Deploy page can create and build it: it
+  needs `rsync` on the machine (`sudo apt install rsync`) and ROS under
+  `/opt/ros`.
 
 ### Robot computers: CAN without a password prompt
 

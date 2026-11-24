@@ -1,7 +1,6 @@
-// Output console for one supervised process.
+// Line viewer with filters (used for live process output and for log files).
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState }
-    from 'preact/hooks';
+import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { html, stripAnsi, AnsiText } from './common.js';
 import { useProcessOutput } from './state.js';
 
@@ -17,23 +16,33 @@ function describeLine(line) {
     const plain = stripAnsi(line);
     const nodeMatch = NODE_PREFIX.exec(plain) || LAUNCH_MESSAGE.exec(plain);
     let level = 'info';
+    // ROS log levels, plus compiler and Python messages.
     if (/\[(ERROR|FATAL)\]|\berror:|Traceback/.test(plain)) level = 'error';
-    else if (/\[WARN(ING)?\]/.test(plain)) level = 'warn';
+    else if (/\[WARN(ING)?\]|\bwarning:/.test(plain)) level = 'warn';
     return { plain, node: nodeMatch ? nodeMatch[1] : null, level };
 }
 
 
+// Live output of one supervised process.
 export function Console({ machineId, processId, height }) {
     const buffer = useProcessOutput(machineId, processId);
+    return html`<${LineView} lines=${buffer.lines} first=${buffer.first}
+        height=${height} emptyText="No output yet." />`;
+}
+
+// Any list of lines (numbered from `first`), with text, level and node
+// filters and follow-the-end scrolling.
+export function LineView({ lines, first = 0, height, emptyText = 'Empty.',
+    tools = null }) {
     const [filter, setFilter] = useState('');
     const [level, setLevel] = useState('all');
     const [node, setNode] = useState('');
     const [isFollowing, setIsFollowing] = useState(true);
     const scroller = useRef(null);
 
-    const described = useMemo(() => buffer.lines.map(
-        (line, index) => ({ line, number: buffer.first + index,
-            ...describeLine(line || '') })), [buffer]);
+    const described = useMemo(() => lines.map(
+        (line, index) => ({ line, number: first + index,
+            ...describeLine(line || '') })), [lines, first]);
     const nodes = useMemo(() => [...new Set(described
         .map((entry) => entry.node).filter(Boolean))].sort(), [described]);
 
@@ -76,6 +85,7 @@ export function Console({ machineId, processId, height }) {
                         </option>`)}
                 </select>
                 <span class="spacer"></span>
+                ${tools}
                 <span class="faint">${shown.length} lines</span>
                 ${!isFollowing && html`<button class="button small"
                     onClick=${() => setIsFollowing(true)}>
@@ -87,8 +97,7 @@ export function Console({ machineId, processId, height }) {
                     ${hidden} earlier lines not shown; filter to narrow
                     down</div>`}
                 ${visible.length === 0 && html`<div class="console-note">
-                    ${buffer.lines.length ? 'No lines match.'
-                        : 'No output yet.'}</div>`}
+                    ${lines.length ? 'No lines match.' : emptyText}</div>`}
                 ${visible.map((entry) => html`
                     <div class="console-line level-${entry.level}"
                         key=${entry.number}>

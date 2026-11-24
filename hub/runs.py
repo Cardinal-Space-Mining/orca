@@ -143,6 +143,7 @@ class Planner:
             self.checkMachine(scenario, role, machine_id, plan)
         if plan['errors']:
             return plan
+        self.checkSameCode(scenario, assignment, plan)
         try:
             for process in dependencyOrder(scenario.get('processes') or []):
                 plan['processes'].append(
@@ -192,13 +193,32 @@ class Planner:
         elif workspace and not workspace.get('has_install'):
             plan['errors'].append('%s: %s has no build (install/ missing)'
                                   % (label, link.machine.label))
-        reference = self.hub.referenceHead()
-        if workspace and reference and workspace.get('head') != reference:
+        reference = self.hub.referenceFingerprint()
+        if workspace and reference and not link.machine.is_local \
+                and workspace.get('fingerprint') != reference:
             plan['warnings'].append(
-                '%s runs %s, but the preview uses this machine\'s %s: '
-                'presets may differ' % (link.machine.label,
-                                        (workspace.get('head') or '?')[:7],
-                                        reference[:7]))
+                '%s has different code than this machine (%s), which the '
+                'preview is based on: presets may differ'
+                % (link.machine.label, (workspace.get('head') or '?')[:7]))
+
+    def checkSameCode(self, scenario, assignment, plan):
+        '''Robot and client must run identical code: net_adapter's MS136
+        codec rejects the other side if its tables differ.'''
+        fingerprints = {}
+        for role, machine_id in assignment.items():
+            if not any(process.get('role') == role and 'lance' in process
+                       for process in scenario.get('processes') or []):
+                continue
+            workspace = self.hub.links_by_id[machine_id].state['workspace']
+            if workspace and workspace.get('fingerprint'):
+                fingerprints.setdefault(workspace['fingerprint'], []).append(
+                    scenario['roles'][role].get('label', role))
+        if len(fingerprints) > 1:
+            groups = ' vs '.join(' + '.join(labels)
+                                 for labels in fingerprints.values())
+            plan['warnings'].append(
+                'Different code on %s: deploy first so both sides match '
+                '(net_adapter needs identical codec tables)' % groups)
 
     # --- One process ---
 
@@ -307,21 +327,30 @@ def newRunId() -> str:
 
 
 class Run:
-    '''One launch of a scenario. Process states come from the agents; the
-    run only orders starting and stopping.'''
+    """One launch: a scenario, a deploy or a bag pull. Process states come
+    from the agents; the run orders starting and stopping.
+
+    Plan entries are either services (stay running; dependents start once
+    they've run for start_delay_s) or tasks ("task": true; dependents start
+    once they've exited successfully, e.g. a push before its build)."""
 
     def __init__(self, hub, run_id: str, label: str, scenario_id: str,
-                 plan: Optional[dict] = None):
+                 plan: Optional[dict] = None, kind: str = 'launch'):
         self.hub = hub
         self.run_id = run_id
         self.label = label
         self.scenario_id = scenario_id
         self.plan = plan
+        self.kind = kind
+        # A failed launch takes down what it started; a failed deploy only
+        # skips the steps that needed the failed one.
+        self.stop_on_failure = kind == 'launch'
         self.started_s = time.time()
         self.error = None
         self.is_starting = False
         self.is_stopping = False
-        # key -> {"machine_id", "process_id", "label", "record"}
+        self.has_failed = False
+        # key -> {"machine_id", "process_id", "label", "task", "record"}
         self.processes = {}
         self.task = None
 
@@ -329,16 +358,20 @@ class Run:
         processes = list(self.processes.values())
         states = [entry['record']['state'] if entry['record'] else 'pending'
                   for entry in processes]
+        failed_tasks = [entry for entry in processes if entry.get('task')
+                        and entry['record'] and entry['record']['state']
+                        == 'exited' and entry['record']['exit_code'] != 0]
         if self.is_starting:
             state = 'starting'
         elif any(state in ('running', 'starting', 'stopping')
                  for state in states):
             state = 'stopping' if self.is_stopping else 'running'
         else:
-            state = 'failed' if self.error else 'finished'
+            state = 'failed' if self.error or failed_tasks else 'finished'
         return {
             'run_id': self.run_id,
             'label': self.label,
+            'kind': self.kind,
             'scenario_id': self.scenario_id,
             'started_s': self.started_s,
             'state': state,
@@ -363,43 +396,66 @@ class Run:
                 'machine_id': entry['machine_id'],
                 'process_id': self.processId(entry['key']),
                 'label': entry['label'],
+                'task': bool(entry.get('task')),
                 'record': None,
             }
         self.publish()
         self.task = asyncio.ensure_future(self.startAll())
 
     async def startAll(self):
+        """Start every entry as soon as its own dependencies allow, so
+        independent chains (pushes to two machines) run side by side."""
+        results = await asyncio.gather(
+            *(self.startWhenReady(entry) for entry in self.plan['processes']),
+            return_exceptions=True)
+        errors = [result for result in results
+                  if isinstance(result, Exception)]
+        self.is_starting = False
+        if errors:
+            self.error = '; '.join(sorted({
+                str(error) or type(error).__name__ for error in errors}))
+            if self.stop_on_failure:
+                await self.stop()
+        self.publish()
+
+    async def startWhenReady(self, entry):
         try:
-            for entry in self.plan['processes']:
-                await self.waitForDependencies(entry)
-                await self.startProcess(entry)
-                self.publish()
+            await self.waitForDependencies(entry)
+            await self.startProcess(entry)
+            self.publish()
         except (AgentError, ConnectionError, asyncio.TimeoutError,
                 PlanError) as error:
-            self.error = str(error) or type(error).__name__
-            self.is_starting = False
-            await self.stop()
-            return
-        self.is_starting = False
-        self.publish()
+            self.has_failed = True
+            raise PlanError('%s: %s' % (entry['label'],
+                                        str(error) or type(error).__name__))
 
     async def waitForDependencies(self, entry):
         deadline = time.time() + DEPENDENCY_TIMEOUT_S
         for dependency in entry['after']:
-            while True:
-                record = self.processes[dependency]['record']
-                if record and record['state'] == 'running' and \
-                        time.time() - record['started_s'] \
-                        >= entry['start_delay_s']:
-                    break
-                if record and record['state'] == 'exited':
-                    raise PlanError('%s exited before %s could start'
-                                    % (self.processes[dependency]['label'],
-                                       entry['label']))
-                if time.time() > deadline:
+            dependency_entry = self.processes[dependency]
+            while not self.isDependencyMet(dependency_entry, entry):
+                if self.has_failed and self.stop_on_failure:
+                    raise PlanError('not started: another process failed')
+                if not dependency_entry['task'] and time.time() > deadline:
                     raise PlanError('timed out waiting for '
-                                    + self.processes[dependency]['label'])
+                                    + dependency_entry['label'])
                 await asyncio.sleep(0.2)
+
+    @staticmethod
+    def isDependencyMet(dependency, entry) -> bool:
+        record = dependency['record']
+        if record is None:
+            return False
+        if dependency['task']:
+            if record['state'] != 'exited':
+                return False
+            if record['exit_code'] != 0:
+                raise PlanError('skipped: %s failed' % dependency['label'])
+            return True
+        if record['state'] == 'exited':
+            raise PlanError('%s exited first' % dependency['label'])
+        return record['state'] == 'running' and \
+            time.time() - record['started_s'] >= entry['start_delay_s']
 
     async def startProcess(self, entry):
         link = self.hub.links_by_id[entry['machine_id']]
@@ -420,8 +476,10 @@ class Run:
             'label': entry['label'],
             'argv': argv,
             'cwd': entry['cwd'],
+            'env': entry.get('env') or {},
             'meta': {'run_id': self.run_id, 'run_label': self.label,
-                     'scenario_id': self.scenario_id, 'key': entry['key']},
+                     'scenario_id': self.scenario_id, 'key': entry['key'],
+                     'kind': self.kind, 'task': bool(entry.get('task'))},
         })
         self.processes[entry['key']]['record'] = record
 
@@ -459,6 +517,7 @@ class Run:
         key = record['meta'].get('key', record['process_id'])
         entry = self.processes.setdefault(key, {
             'machine_id': machine_id, 'process_id': record['process_id'],
-            'label': record['label'], 'record': None})
+            'label': record['label'],
+            'task': bool(record['meta'].get('task')), 'record': None})
         entry['record'] = record
         self.publish()

@@ -5,7 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>CSM Hub</title>
     <link rel="icon" href="/static/csm-logo-dark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/vendor/xterm.css">
     <link rel="stylesheet" href="/static/style.css">
+    <!-- xterm.js ships as a classic script: defines window.Terminal and
+         window.FitAddon. -->
+    <script src="/static/vendor/xterm.js"></script>
+    <script src="/static/vendor/xterm-addon-fit.js"></script>
     <!-- Everything is served locally: the competition network has no
          internet. -->
     <script type="importmap">

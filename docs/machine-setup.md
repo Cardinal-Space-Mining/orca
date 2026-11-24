@@ -61,8 +61,24 @@ Check with `sudo -n ip link show` (no password prompt) on the robot computer.
 ## macOS VM hosts (robot mac)
 
 - csm-vm at the path in `machines.json` (`vm.csm_vm_path`, normally
-  `~/code/csm-vm`). The hub reads the VM's state from it; VM control comes in
-  a later phase.
+  `~/code/csm-vm`), **with the run-vm.sh that has `--overlay` and the serial
+  console** (`./run-vm.sh --help` lists `--overlay`). Older copies stop at the
+  "uncommitted overlay" question when started without a terminal.
+- **Passwordless sudo for QEMU and socat**, which run-vm.sh runs as root
+  (vmnet networking and USB passthrough need it, and the monitor and serial
+  sockets are root's):
+  ```bash
+  sudo visudo -f /etc/sudoers.d/csm-vm
+  ```
+  ```
+  # csm-vm: start/stop the VM and reach its sockets without a terminal
+  lance ALL=(root) NOPASSWD: /opt/homebrew/bin/qemu-system-aarch64, /opt/homebrew/bin/socat
+  ```
+  Passwordless QEMU as root is close to passwordless root (QEMU can open any
+  file as a disk), which is acceptable on a dedicated robot computer but worth
+  knowing.
+- Then restart the VM once from the hub (Machines → the mac's VM →
+  Restart): VMs started by an older run-vm.sh have no serial console.
 - Prefer the mac's IP addresses over `sams-mac-mini.local`-style names in the
   inventory: with Wi-Fi and Ethernet on the same network, the `.local` name
   can resolve to the slower Wi-Fi address.

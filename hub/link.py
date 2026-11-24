@@ -31,6 +31,7 @@ VM_PERIOD_S = 5.0
 WORKSPACE_PERIOD_S = 30.0
 STREAM_LIMIT_BYTES = 16 * 1024 * 1024
 ROUTE_STAGGER_S = 0.4
+ROUTE_UPGRADE_PERIOD_S = 60.0
 MIRROR_LINES = 5000
 
 
@@ -241,6 +242,8 @@ class MachineLink:
         self.active_route: Optional[Route] = None
         self.wake_event = asyncio.Event()
         self.processes = {}  # process id -> ProcessMirror
+        self.terminals = set()  # ids of terminals open on this connection
+        self.task = None
         self.state = {
             'connection': {'state': 'idle', 'route': None, 'error': None,
                            'since_s': time.time(), 'retry_at_s': None,
@@ -267,6 +270,17 @@ class MachineLink:
             connection['since_s'] = time.time()
         connection.update(changes)
         self.publish()
+
+    def start(self):
+        self.task = asyncio.ensure_future(self.run())
+
+    async def stop(self):
+        '''Disconnect for good (the machine left the inventory).'''
+        if self.task:
+            self.task.cancel()
+        if self.connection is not None:
+            await self.connection.close()
+            self.connection = None
 
     def requestReconnect(self):
         """Drop the current connection (if any) and retry immediately."""
@@ -549,6 +563,7 @@ class MachineLink:
                 task.cancel()
             await connection.close()
             self.connection = None
+            self.endTerminals()
             if not self.state['connection']['error']:
                 self.setConnection(
                     error=connection.lastError() or 'connection lost')
@@ -570,6 +585,8 @@ class MachineLink:
 
     def pollTasks(self) -> list:
         tasks = [self.poll(PING_PERIOD_S, self.measureLatency)]
+        if len(self.machine.routes) > 1:
+            tasks.append(self.preferEarlierRoutes())
         if self.machine.workspace:
             tasks.append(self.poll(WORKSPACE_PERIOD_S, self.refreshWorkspace))
         if self.machine.vm:
@@ -583,6 +600,23 @@ class MachineLink:
             except (AgentError, ConnectionError, asyncio.TimeoutError):
                 pass
             await asyncio.sleep(period_s)
+
+    async def preferEarlierRoutes(self):
+        '''Connected through a fallback (e.g. the jump through the mac
+        because the VM's own network wasn't up yet at boot)? Move back to a
+        preferred route once it answers. Not while terminals are open: they
+        live on this connection. Supervised processes are unaffected.'''
+        while True:
+            await asyncio.sleep(ROUTE_UPGRADE_PERIOD_S)
+            routes = self.machine.routes
+            if self.active_route not in routes or self.terminals:
+                continue
+            for route in routes[:routes.index(self.active_route)]:
+                _, connection, _, _ = await self.probe(route, 0)
+                if connection is not None:
+                    await connection.close()
+                    self.requestReconnect()
+                    return
 
     async def measureLatency(self):
         sent_s = time.time()
@@ -613,6 +647,21 @@ class MachineLink:
             self.onProcessState(data)
         elif name == 'process.output':
             self.onProcessOutput(data)
+        elif name == 'terminal.output':
+            self.hub.publish('terminal.output',
+                             dict(data, machine_id=self.machine.id))
+        elif name == 'terminal.exit':
+            self.terminals.discard(data['terminal_id'])
+            self.hub.publish('terminal.exit',
+                             dict(data, machine_id=self.machine.id))
+
+    def endTerminals(self):
+        '''Terminals live on the connection; tell the browser they ended.'''
+        for terminal_id in list(self.terminals):
+            self.hub.publish('terminal.exit', {
+                'machine_id': self.machine.id, 'terminal_id': terminal_id,
+                'exit_code': None, 'reason': 'connection lost'})
+        self.terminals.clear()
 
     def onProcessState(self, record: dict):
         mirror = self.processes.get(record['process_id'])

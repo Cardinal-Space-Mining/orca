@@ -896,7 +896,8 @@ def qemuProcesses():
 def describeQemuArgs(args):
     '''Pull the interesting settings out of a QEMU command line.'''
     description = {'usb_devices': [], 'networks': [], 'cpus': None,
-                   'memory': None, 'monitor_socket': None}
+                   'memory': None, 'monitor_socket': None,
+                   'serial_socket': None}
     for flag, value in zip(args, args[1:]):
         if flag == '-device' and value.startswith('usb-host'):
             vendor = re.search(r'vendorid=(0x[0-9a-fA-F]+)', value)
@@ -917,6 +918,8 @@ def describeQemuArgs(args):
             description['memory'] = value
         elif flag == '-monitor' and value.startswith('unix:'):
             description['monitor_socket'] = value[5:].split(',', 1)[0]
+        elif flag == '-serial' and value.startswith('unix:'):
+            description['serial_socket'] = value[5:].split(',', 1)[0]
     return description
 
 
@@ -1284,6 +1287,163 @@ class ProcessManager:
 
 
 
+# --- Terminals ----------------------------------------------------------------
+
+
+
+TERMINAL_FLUSH_S = 0.015
+
+
+def runExecTty(argv):
+    '''`exec-tty` mode, run in a new session on the terminal's pty: adopt it
+    as the controlling terminal (so shells get job control and Ctrl-C reaches
+    the foreground job), then become the real program. A trampoline instead
+    of preexec_fn, which isn't safe in the threaded daemon.'''
+    request = getattr(termios, 'TIOCSCTTY', None)
+    if request is not None:
+        try:
+            fcntl.ioctl(0, request, 0)
+        except OSError:
+            pass
+    try:
+        os.execvp(argv[0], argv)
+    except OSError as error:
+        sys.stderr.write('could not start %s: %s\n' % (argv[0], error))
+        return 127
+
+
+class Terminal:
+    '''An interactive program on a pseudo-terminal (a shell, or the VM's
+    serial console). Unlike supervised processes it belongs to the client
+    that opened it and is hung up when that client goes away.'''
+
+    def __init__(self, manager, session, terminal_id, params):
+        self.manager = manager
+        self.session = session
+        self.terminal_id = terminal_id
+        self.argv = params['argv']
+        self.cwd = os.path.expanduser(params.get('cwd') or '~')
+        self.columns = int(params.get('cols', 100))
+        self.rows = int(params.get('rows', 30))
+        self.extra_env = params.get('env') or {}
+        self.popen = None
+        self.master = None
+        self.decoder = codecs.getincrementaldecoder('utf-8')('replace')
+        self.pending = []
+        self.flush_handle = None
+
+    def environment(self):
+        environment = dict(os.environ)
+        environment.update({'TERM': 'xterm-256color',
+                            'COLORTERM': 'truecolor'})
+        environment.update(
+            {str(key): str(value) for key, value in self.extra_env.items()})
+        return environment
+
+    def start(self, loop):
+        self.master, slave = pty.openpty()
+        self.setSize(self.columns, self.rows, slave)
+        try:
+            self.popen = subprocess.Popen(
+                [sys.executable, AGENT_PATH, 'exec-tty'] + self.argv,
+                cwd=self.cwd, env=self.environment(),
+                stdin=slave, stdout=slave, stderr=slave,
+                start_new_session=True, close_fds=True)
+        except OSError as error:
+            os.close(self.master)
+            os.close(slave)
+            raise RuntimeError('could not start %s: %s'
+                               % (self.argv[0], error))
+        os.close(slave)
+        threading.Thread(target=self.readOutput, args=(loop,),
+                         daemon=True).start()
+
+    def setSize(self, columns, rows, descriptor=None):
+        self.columns, self.rows = columns, rows
+        fcntl.ioctl(descriptor if descriptor is not None else self.master,
+                    termios.TIOCSWINSZ,
+                    struct.pack('HHHH', rows, columns, 0, 0))
+
+    def write(self, text):
+        data = text.encode()
+        while data:
+            written = os.write(self.master, data)
+            data = data[written:]
+
+    def readOutput(self, loop):
+        while True:
+            try:
+                data = os.read(self.master, 65536)
+            except OSError:
+                data = b''
+            if not data:
+                break
+            loop.call_soon_threadsafe(self.onOutput, data)
+        return_code = self.popen.wait()
+        loop.call_soon_threadsafe(self.onExit, return_code)
+
+    def onOutput(self, data):
+        self.pending.append(self.decoder.decode(data))
+        if self.flush_handle is None:
+            self.flush_handle = asyncio.get_running_loop().call_later(
+                TERMINAL_FLUSH_S, self.flush)
+
+    def flush(self):
+        self.flush_handle = None
+        if self.pending:
+            text, self.pending = ''.join(self.pending), []
+            asyncio.ensure_future(self.session.send({
+                'event': 'terminal.output',
+                'data': {'terminal_id': self.terminal_id, 'data': text}}))
+
+    def onExit(self, return_code):
+        if self.flush_handle:
+            self.flush_handle.cancel()
+        self.flush()
+        try:
+            os.close(self.master)
+        except OSError:
+            pass
+        self.manager.terminals.pop(self.terminal_id, None)
+        asyncio.ensure_future(self.session.send({
+            'event': 'terminal.exit',
+            'data': {'terminal_id': self.terminal_id,
+                     'exit_code': return_code}}))
+
+    def close(self):
+        try:
+            os.killpg(self.popen.pid, signal.SIGHUP)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+class TerminalManager:
+
+    def __init__(self):
+        self.terminals = {}  # terminal id -> Terminal
+        self.next_id = 1
+
+    def open(self, session, params):
+        terminal_id = 't%d' % self.next_id
+        self.next_id += 1
+        terminal = Terminal(self, session, terminal_id, params)
+        terminal.start(asyncio.get_running_loop())
+        self.terminals[terminal_id] = terminal
+        return {'terminal_id': terminal_id}
+
+    def get(self, terminal_id):
+        terminal = self.terminals.get(terminal_id)
+        if terminal is None:
+            raise KeyError('no terminal ' + str(terminal_id))
+        return terminal
+
+    def closeSession(self, session):
+        for terminal in list(self.terminals.values()):
+            if terminal.session is session:
+                terminal.close()
+
+
+
 # --- Daemon -------------------------------------------------------------------
 
 
@@ -1376,6 +1536,7 @@ class Daemon:
         self.last_stats = None
         self.last_stats_s = 0.0
         self.processes = ProcessManager(self)
+        self.terminals = TerminalManager()
         self.methods = {
             'ping': self.methodPing,
             'system.info': self.methodSystemInfo,
@@ -1390,6 +1551,10 @@ class Daemon:
             'process.watch': self.methodProcessWatch,
             'file.write': self.methodFileWrite,
             'workspace.refs': self.methodWorkspaceRefs,
+            'terminal.open': self.methodTerminalOpen,
+            'terminal.input': self.methodTerminalInput,
+            'terminal.resize': self.methodTerminalResize,
+            'terminal.close': self.methodTerminalClose,
             'bags.list': self.methodBagsList,
             'bags.delete': self.methodBagsDelete,
             'logs.list': self.methodLogsList,
@@ -1493,6 +1658,26 @@ class Daemon:
         return await asyncio.get_running_loop().run_in_executor(
             None, function, *arguments)
 
+    async def methodTerminalOpen(self, session, params):
+        '''params: argv (default: the user's login shell), cwd, cols, rows.'''
+        if not params.get('argv'):
+            shell = os.environ.get('SHELL') or '/bin/bash'
+            params = dict(params, argv=[shell, '-l'])
+        return self.terminals.open(session, params)
+
+    async def methodTerminalInput(self, session, params):
+        self.terminals.get(params['terminal_id']).write(params['data'])
+        return {}
+
+    async def methodTerminalResize(self, session, params):
+        self.terminals.get(params['terminal_id']).setSize(
+            int(params['cols']), int(params['rows']))
+        return {}
+
+    async def methodTerminalClose(self, session, params):
+        self.terminals.get(params['terminal_id']).close()
+        return {}
+
     async def methodWorkspaceRefs(self, session, params):
         return await self.inThread(workspaceRefs, params['path'])
 
@@ -1528,6 +1713,7 @@ class Daemon:
             session.close()
         finally:
             self.sessions.discard(session)
+            self.terminals.closeSession(session)
 
     async def serve(self):
         loop = asyncio.get_running_loop()
@@ -1704,6 +1890,8 @@ def main():
     if mode == 'hash':
         print(AGENT_HASH)
         return 0
+    if mode == 'exec-tty' and len(sys.argv) > 2:
+        return runExecTty(sys.argv[2:])
     print(__doc__)
     return 2
 

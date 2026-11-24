@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from 'preact/hooks';
 import { getJson } from './common.js';
+import { terminalStore } from './terminals.js';
 
 
 // --- Process output store ----------------------------------------------------
@@ -103,10 +104,14 @@ export function useProcessOutput(machineId, processId) {
 // --- Hub state ---------------------------------------------------------------
 
 function replaceMachine(previous, machine) {
-    return previous && {
+    if (!previous) return previous;
+    const isKnown = previous.machines.some((entry) =>
+        entry.machine.id === machine.machine.id);
+    return {
         ...previous,
-        machines: previous.machines.map((entry) =>
-            entry.machine.id === machine.machine.id ? machine : entry),
+        machines: isKnown ? previous.machines.map((entry) =>
+            entry.machine.id === machine.machine.id ? machine : entry)
+            : [...previous.machines, machine],
     };
 }
 
@@ -139,6 +144,18 @@ export function useHubState() {
         }));
         on('output', (output) => outputStore.merge(output.machine_id,
             output.process_id, output.first_line_number, output.lines));
+        on('terminal.output', (data) => terminalStore.onOutput(data));
+        on('terminal.exit', (data) => terminalStore.onExit(data));
+        on('machine.removed', ({ id }) => setState((previous) => previous && {
+            ...previous,
+            machines: previous.machines.filter((entry) =>
+                entry.machine.id !== id),
+        }));
+        on('machines.order', ({ ids }) => setState((previous) => previous && {
+            ...previous,
+            machines: ids.map((id) => previous.machines.find((entry) =>
+                entry.machine.id === id)).filter(Boolean),
+        }));
         return () => events.close();
     }, []);
 

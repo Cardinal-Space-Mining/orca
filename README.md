@@ -20,7 +20,7 @@ CAN permissions): [docs/machine-setup.md](docs/machine-setup.md).
 
 | Page | What it does |
 |---|---|
-| Machines | Every machine: connection, load, network (incl. Wi-Fi channel), workspace commit vs. yours, the VM on a mac host. |
+| Machines | Every machine: connection, load, network (incl. Wi-Fi channel), whether it runs the same code as yours. A terminal on any machine; the VM on a mac host: start, shut down, restart, force stop, commit the overlay, back up, restore, and its serial console. **Edit machines** changes the inventory files in the app. |
 | Launch | Pick a scenario, assign machines to its roles, check the exact commands, launch. |
 | Runs | Everything launched, deployed or pulled, with live output per process (filter by text, level or node), stop all or one. |
 | Deploy | Push this workspace's `src/` to other machines and build there; compare first to see exactly what changes. |
@@ -159,6 +159,21 @@ Bags are pulled into this workspace's `bag_recordings/` (like
 `sync.sh pull --bags`), resumably. Deleting a bag on the robot is only
 offered once an identical copy is here.
 
+## Terminals and the VM
+
+- **Terminal** on any machine card opens a shell there, in a dock at the
+  bottom of every page (several at once, in tabs). It replaces `ssh` for
+  anything the pages don't cover.
+- **Serial console** on a running VM connects to its serial port, so you can
+  log in and fix networking while the VM's own network is down (what
+  `run-vm.sh --term` was for, without stopping the VM). Every key goes to the
+  VM, Ctrl-C included; close the tab to leave.
+- **VM actions** run csm-vm's `run-vm.sh` on the mac and show its output on
+  the Runs page. Starting asks what to do with an overlay a previous session
+  left (reuse, commit, discard). Needs the updated run-vm.sh and passwordless
+  sudo for QEMU and socat on the mac ([docs/machine-setup.md](
+  docs/machine-setup.md)).
+
 ## How it works
 
 ```
@@ -194,8 +209,8 @@ offered once an identical copy is here.
 | 0 | Agent, inventory, machines view (status, network, workspace, VM) | done |
 | 1 | Scenarios and synchronized launch with output streaming; config browser; value overrides (IP pairing); host key trust | done |
 | 2 | Deploy (compare, push, remote build, code fingerprints), bags, logs | done |
-| 3 | VM control and serial console; editing the inventory in the app | next |
-| 4 | Network tools, bandwidth budget, competition mode | |
+| 3 | VM control, terminals and serial console; editing the inventory in the app | done |
+| 4 | Network tools, bandwidth budget, competition mode | next |
 | 5 | Native macOS processes | |
 
 Bugs and inconsistencies found along the way, in this and other repos, are

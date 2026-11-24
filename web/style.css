@@ -924,3 +924,133 @@ pre.code {
 .log-item small { color: var(--text-faint); font-size: 11px; }
 a.button { text-decoration: none; display: inline-block; }
 .options select.input { max-width: 320px; }
+
+
+/* --- VM controls ----------------------------------------------------------- */
+
+.vm-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    margin: 2px 0 12px; }
+.vm-form {
+    margin: 0 0 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-small);
+    background: var(--background-raised);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 13px;
+}
+.vm-form .check b { font-weight: 600; }
+.vm-form .check .faint { margin-left: 4px; }
+.vm-form .button-row { margin-top: 4px; }
+.vm-form input[type=radio] { accent-color: var(--brand); }
+
+
+/* --- Terminal dock --------------------------------------------------------- */
+
+.terminal-dock {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    height: 44vh;
+    display: flex;
+    flex-direction: column;
+    background: #08080a;
+    border-top: 1px solid rgba(200, 32, 47, 0.45);
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.5);
+}
+.terminal-dock.minimized { height: auto; }
+.terminal-dock.minimized .terminal-body { display: none; }
+body:has(.terminal-dock:not(.minimized)) main { padding-bottom: 46vh; }
+.terminal-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    background: var(--background-raised);
+    border-bottom: 1px solid var(--border);
+}
+.terminal-tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px 5px 12px;
+    border-radius: 6px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.terminal-tab:hover { background: var(--surface); }
+.terminal-tab.active { background: var(--brand-soft); color: var(--text); }
+.terminal-tab.exited { opacity: 0.6; }
+.tab-close {
+    border: 0;
+    background: none;
+    color: var(--text-faint);
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    padding: 0 4px;
+}
+.tab-close:hover { color: var(--bad); }
+.terminal-body { flex: 1; min-height: 0; padding: 6px 4px 4px 10px; }
+.terminal-view { width: 100%; height: 100%; }
+.terminal-view .xterm-viewport { background: #08080a !important; }
+
+
+/* --- Inventory editor ------------------------------------------------------ */
+
+.machine-form {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-small);
+    background: var(--background-raised);
+    margin-top: 10px;
+}
+.machine-form.open { border-color: var(--border-strong); }
+.machine-form-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 11px 14px;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    text-align: left;
+    font-size: 13.5px;
+}
+.machine-form-head .faint { overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+.machine-form-body { padding: 0 14px 14px; }
+.machine-form-body .fields { margin: 6px 0 12px; }
+.machine-form-body .section-head { margin-top: 14px; }
+.route-head, .route-row {
+    display: grid;
+    grid-template-columns: 18px 1.3fr 0.9fr 64px 1fr 1.3fr 74px;
+    gap: 8px;
+    align-items: center;
+}
+.route-head { font-size: 11px; color: var(--text-faint); margin-bottom: 4px; }
+.route-row { margin-bottom: 6px; }
+.route-row .input { padding: 5px 8px; font-size: 12.5px; }
+.route-number { color: var(--text-faint); font-size: 12px; }
+.route-buttons { display: flex; gap: 8px; }
+.route-buttons .link-button:disabled { opacity: 0.3; cursor: default; }
+.code-editor {
+    width: 100%;
+    min-height: 480px;
+    font: 12.5px/1.5 var(--mono);
+    resize: vertical;
+}
+.ok-banner {
+    margin-top: 12px;
+    padding: 9px 12px;
+    border-radius: var(--radius-small);
+    background: var(--good-soft);
+    color: var(--good);
+    font-size: 12.5px;
+}

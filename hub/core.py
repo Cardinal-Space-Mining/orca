@@ -11,12 +11,14 @@ import os
 import socket
 from typing import Optional
 
-from .inventory import Route
+from .inventory import (Route, inventoryScopes, loadInventory,
+                        readInventoryRaw, writeInventory)
 from .lance_config import ConfigError, LanceConfig
 from .deploy import Deployer
 from .link import MachineLink
 from .runs import PlanError, Planner, Run, newRunId
 from .scenarios import loadScenarios
+from .vm import VmController
 
 
 HUB_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,6 +40,8 @@ class Hub:
         self.runs = {}  # run id -> Run
         self.planner = Planner(self)
         self.deployer = Deployer(self)
+        self.vm = VmController(self)
+        self.stop_event = None
         self.lance_config = None
         self.lance_config_error = None
 
@@ -49,7 +53,10 @@ class Hub:
         self.agent_hash = hashlib.sha256(self.agent_bytes).hexdigest()[:12]
 
     async def run(self):
-        await asyncio.gather(*(link.run() for link in self.links))
+        self.stop_event = asyncio.Event()
+        for link in self.links:
+            link.start()
+        await self.stop_event.wait()
 
     # --- Lookups ---
 
@@ -128,6 +135,67 @@ class Hub:
 
     def reconnect(self, machine_id: str):
         self.link(machine_id).requestReconnect()
+
+    # --- Inventory ---
+
+    def inventory(self) -> dict:
+        return {scope: readInventoryRaw(path) for scope, path
+                in inventoryScopes(self.workspace_root).items()}
+
+    async def saveInventory(self, scope: str, entries: list) -> dict:
+        path = writeInventory(self.workspace_root, scope, entries)
+        await self.reloadInventory()
+        return {'path': path}
+
+    async def reloadInventory(self):
+        '''Apply the inventory files without restarting: new machines get a
+        link, removed ones are disconnected, changed ones reconnect.'''
+        machines = loadInventory(self.workspace_root)
+        new_ids = [machine.id for machine in machines]
+        for link in list(self.links):
+            if link.machine.id not in new_ids:
+                await link.stop()
+                self.publish('machine.removed', {'id': link.machine.id})
+        links = []
+        for machine in machines:
+            link = self.links_by_id.get(machine.id)
+            if link is None:
+                link = MachineLink(self, machine)
+                link.start()
+            elif link.machine != machine:
+                link.machine = machine
+                link.active_route = None
+                link.requestReconnect()
+            links.append(link)
+        self.links = links
+        self.links_by_id = {link.machine.id: link for link in links}
+        self.machines_by_id = {machine.id: machine for machine in machines}
+        for link in links:
+            link.publish()
+        self.publish('machines.order', {'ids': new_ids})
+
+    # --- Terminals ---
+
+    async def openTerminal(self, machine_id: str, kind: str, columns: int,
+                           rows: int) -> dict:
+        link = self.link(machine_id)
+        params = {'cols': columns, 'rows': rows}
+        if kind == 'serial':
+            params['argv'] = self.vm.serialConsoleArgv(machine_id)
+            guest = self.links_by_id.get(link.machine.vm.guest or '')
+            title = 'Serial console · %s' % (
+                guest.machine.label if guest else link.machine.label)
+        else:
+            params['cwd'] = link.machine.workspace or '~'
+            title = 'Shell · %s' % link.machine.label
+        opened = await link.call('terminal.open', params)
+        link.terminals.add(opened['terminal_id'])
+        return {'machine_id': machine_id, 'terminal_id':
+                opened['terminal_id'], 'title': title, 'kind': kind}
+
+    async def terminalCall(self, machine_id: str, method: str,
+                           params: dict):
+        return await self.link(machine_id).call(method, params)
 
     # --- Runs ---
 

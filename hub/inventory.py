@@ -192,3 +192,64 @@ def loadInventory(workspace_root: Optional[str]) -> list:
             machines[machine.id] = machine
     checkReferences(machines)
     return list(machines.values())
+
+
+
+# --- Editing ------------------------------------------------------------------
+
+
+
+def inventoryScopes(workspace_root: Optional[str]) -> dict:
+    '''The editable files: "project" (the team's, in the workspace) and
+    "user" (this user's own).'''
+    scopes = {'user': USER_INVENTORY_PATH}
+    if workspace_root:
+        scopes['project'] = os.path.join(workspace_root,
+                                         PROJECT_INVENTORY_PATH)
+    return scopes
+
+
+def readInventoryRaw(path: str) -> dict:
+    '''A file's machines as written, unknown keys included, for editing.'''
+    if not os.path.isfile(path):
+        return {'path': path, 'exists': False, 'machines': []}
+    with open(path) as file:
+        data = json.load(file)
+    return {'path': path, 'exists': True,
+            'machines': data.get('machines', [])}
+
+
+def validateEdit(workspace_root: Optional[str], scope: str,
+                 entries: list) -> None:
+    '''Check a new version of one file against the others, as loadInventory
+    would merge them. Raises InventoryError.'''
+    scopes = inventoryScopes(workspace_root)
+    if scope not in scopes:
+        raise InventoryError('no inventory file "%s"' % scope)
+    ids = [entry.get('id') for entry in entries]
+    duplicates = sorted({machine_id for machine_id in ids
+                         if ids.count(machine_id) > 1})
+    if duplicates:
+        raise InventoryError('duplicate machine ids: ' + ', '.join(duplicates))
+    machines = {LOCAL_MACHINE_ID: localMachine(workspace_root)}
+    for path in inventoryPaths(workspace_root):
+        if path == scopes[scope]:
+            parsed = [parseMachine(entry, path) for entry in entries]
+        else:
+            parsed = readInventoryFile(path)
+        for machine in parsed:
+            machines[machine.id] = machine
+    checkReferences(machines)
+
+
+def writeInventory(workspace_root: Optional[str], scope: str,
+                   entries: list) -> str:
+    validateEdit(workspace_root, scope, entries)
+    path = inventoryScopes(workspace_root)[scope]
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temporary_path = path + '.tmp'
+    with open(temporary_path, 'w') as file:
+        json.dump({'machines': entries}, file, indent=4)
+        file.write('\n')
+    os.replace(temporary_path, path)
+    return path

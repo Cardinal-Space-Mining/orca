@@ -23,6 +23,12 @@ Small HTTP server for the hub's web interface (standard library only).
     POST /api/machines/<id>/bags/delete     {"name"}, only once pulled
     GET  /api/machines/<id>/logs            log files there
     GET  /api/machines/<id>/logs/read?path=&max_bytes=[&download=1]
+    POST /api/machines/<id>/vm/<action>     start, stop, restart, kill, commit,
+                                            backup, restore (a run)
+    POST /api/machines/<id>/terminals       {"kind": "shell"|"serial"}
+    POST /api/machines/<id>/terminals/<t>/input|resize|close
+    GET  /api/inventory                     both inventory files, as written
+    POST /api/inventory/<scope>             {"machines": [...]}: save, apply
     GET  /api/config                        launch config actions and presets
     GET  /api/config/preset?action=&preset= one preset, resolved
     POST /api/config/resolve                {"arguments": {key: value}}
@@ -42,6 +48,7 @@ from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .core import HUB_ROOT, Hub
+from .inventory import InventoryError
 from .lance_config import ConfigError
 from .link import AgentError
 from .runs import PlanError
@@ -55,6 +62,7 @@ KEEPALIVE_PERIOD_S = 15.0
 
 # Errors a request can cause; reported to the browser as 400 + message.
 REQUEST_ERRORS = (PlanError, ConfigError, ScenarioError, AgentError,
+                  InventoryError,
                   ConnectionError, asyncio.TimeoutError, ValueError, KeyError)
 
 STATUS_TEXT = {200: 'OK', 400: 'Bad Request', 404: 'Not Found',
@@ -223,6 +231,11 @@ class HttpServer:
                 return {'ok': True}
         if parts[:1] == ['config']:
             return self.answerConfig(request, parts[1:])
+        if method == 'GET' and parts == ['inventory']:
+            return hub.inventory()
+        if method == 'POST' and len(parts) == 2 and parts[0] == 'inventory':
+            return await hub.saveInventory(parts[1],
+                                           request.json()['machines'])
         if method == 'POST' and parts == ['deploy', 'compare']:
             body = request.json()
             return await hub.deployer.compare(body['machine_id'],
@@ -244,6 +257,10 @@ class HttpServer:
                 return await link.scanHostKey()
             await link.trustHostKey(request.json()['fingerprints'])
             return {'ok': True}
+        if method == 'POST' and len(parts) == 2 and parts[0] == 'vm':
+            return hub.vm.run(machine_id, parts[1], request.json()).snapshot()
+        if method == 'POST' and parts[:1] == ['terminals']:
+            return await self.answerTerminal(request, machine_id, parts[1:])
         if parts[:1] == ['bags']:
             if method == 'GET' and len(parts) == 1:
                 return await hub.deployer.listBags(machine_id)
@@ -268,6 +285,29 @@ class HttpServer:
                 await hub.stopProcess(machine_id, process_id)
                 return {'ok': True}
         return None
+
+    async def answerTerminal(self, request: Request, machine_id: str,
+                             parts: list):
+        hub = self.hub
+        body = request.json()
+        if parts == []:
+            return await hub.openTerminal(
+                machine_id, body.get('kind', 'shell'),
+                int(body.get('cols', 100)), int(body.get('rows', 30)))
+        if len(parts) != 2:
+            return None
+        terminal_id, action = parts
+        if action == 'input':
+            params = {'terminal_id': terminal_id, 'data': body['data']}
+        elif action == 'resize':
+            params = {'terminal_id': terminal_id, 'cols': int(body['cols']),
+                      'rows': int(body['rows'])}
+        elif action == 'close':
+            params = {'terminal_id': terminal_id}
+        else:
+            return None
+        await hub.terminalCall(machine_id, 'terminal.' + action, params)
+        return {'ok': True}
 
     async def downloadLog(self, request: Request, machine_id: str, writer):
         log = await self.hub.readLog(machine_id, request.queryValue('path'),

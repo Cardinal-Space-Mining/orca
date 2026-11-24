@@ -12,6 +12,8 @@ import { ConfigView } from './js/config.js';
 import { DeployView } from './js/deploy.js';
 import { BagsView } from './js/bags.js';
 import { LogsView } from './js/logs.js';
+import { InventoryView } from './js/inventory.js';
+import { TerminalDock } from './js/terminals.js';
 
 
 const TABS = [
@@ -102,6 +104,7 @@ function Page({ state, location, navigate, now }) {
         case 'config':
             return html`<${ConfigView} />`;
         default:
+            if (location.detail === 'edit') return html`<${InventoryView} />`;
             return html`<${MachinesView} state=${state} now=${now} />`;
     }
 }
@@ -117,7 +120,8 @@ function App() {
             ${state ? html`<${Page} state=${state} location=${location}
                 navigate=${navigate} now=${now} />`
                 : html`<div class="placeholder">Connecting to the hub…</div>`}
-        </main>`;
+        </main>
+        <${TerminalDock} />`;
 }
 
 render(html`<${App} />`, document.getElementById('app'));

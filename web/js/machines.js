@@ -6,6 +6,7 @@ import {
     html, formatBytes, formatDuration, formatAgo, formatMilliseconds,
     formatOffset, shortCommit, levelFor, getJson, postJson, StatusDot,
 } from './common.js';
+import { openTerminal } from './terminals.js';
 
 
 // --- Reference data ----------------------------------------------------------
@@ -209,7 +210,117 @@ function WorkspaceSection({ path, workspace, reference, isReference, now }) {
         </div>`;
 }
 
-function VmSection({ vm, guestLabel }) {
+// --- VM controls -------------------------------------------------------------
+
+function showRun(runId) {
+    window.location.hash = `#/runs/${runId}`;
+}
+
+// Start or restart: what to do with an overlay a previous session left
+// behind (it holds changes made in the VM since that session started).
+function StartForm({ vm, action, onSubmit, onCancel }) {
+    const hasOverlay = vm.disks.overlay_bytes != null && action === 'start';
+    const [overlay, setOverlay] = useState('reuse');
+    const [wifi, setWifi] = useState(false);
+    const choices = [
+        ['reuse', 'Reuse it', 'continue with the changes made in the VM'],
+        ['commit', 'Commit it', 'save the changes into the base disk first'],
+        ['discard', 'Discard it', 'start from the base disk; changes are lost'],
+    ];
+    return html`
+        <div class="vm-form">
+            ${hasOverlay && html`
+                <div class="muted">${`An overlay from a previous session is
+                    there (${formatBytes(vm.disks.overlay_bytes)}):`}</div>
+                ${choices.map(([value, label, detail]) => html`
+                    <label class="check"><input type="radio" name="overlay"
+                        checked=${overlay === value}
+                        onChange=${() => setOverlay(value)} />
+                        <b>${label}</b><span class="faint">${detail}</span>
+                    </label>`)}`}
+            <label class="check"><input type="checkbox" checked=${wifi}
+                onChange=${(event) => setWifi(event.target.checked)} />
+                Share the mac's Wi-Fi with the VM
+                <span class="faint">(--wifi)</span></label>
+            <div class="button-row">
+                <button class="button primary"
+                    onClick=${() => onSubmit({ overlay, wifi })}>
+                    ${action === 'start' ? 'Start' : 'Restart'}</button>
+                <button class="button" onClick=${onCancel}>Cancel</button>
+            </div>
+        </div>`;
+}
+
+const CONFIRMATIONS = {
+    kill: 'Force-stop the VM? Like pulling its power cord: unsaved work in '
+        + 'the VM is lost, and the overlay is not committed.',
+    restore: 'Restore the base disk from the backup? Everything since the '
+        + 'backup is lost, and the current overlay is deleted.',
+    discard: 'Discard the overlay? Changes made in the VM since the last '
+        + 'commit are lost.',
+};
+
+function VmActions({ machineId, vm, vmRun }) {
+    const [form, setForm] = useState(null);  // 'start' | 'restart' | null
+    const [error, setError] = useState(null);
+    const isBusy = vmRun && ['starting', 'running'].includes(vmRun.state);
+
+    async function act(action, options = {}) {
+        if (CONFIRMATIONS[action] && !window.confirm(CONFIRMATIONS[action])) {
+            return;
+        }
+        if (options.overlay === 'discard'
+                && !window.confirm(CONFIRMATIONS.discard)) {
+            return;
+        }
+        setForm(null);
+        setError(null);
+        try {
+            const run = await postJson(
+                `/api/machines/${encodeURIComponent(machineId)}/vm/${action}`,
+                options);
+            showRun(run.run_id);
+        } catch (failure) {
+            setError(failure.message);
+        }
+    }
+
+    const button = (label, onClick, extra = '') => html`<button
+        class="button small ${extra}" disabled=${isBusy}
+        onClick=${onClick}>${label}</button>`;
+    const hasSerial = vm.is_running && vm.serial_socket;
+    return html`
+        <div class="vm-actions">
+            ${vm.is_running ? html`
+                <button class="button small primary" disabled=${!hasSerial}
+                    title=${hasSerial ? 'Log in to the VM without SSH'
+                        : 'Started without a serial console: restart it from '
+                        + 'here to get one'}
+                    onClick=${() => openTerminal(machineId, 'serial')}>
+                    Serial console</button>
+                ${button('Restart…', () => setForm('restart'))}
+                ${button('Shut down', () => act('stop'))}
+                ${button('Force stop', () => act('kill'), 'danger')}`
+            : html`
+                ${button('Start…', () => setForm('start'), 'primary')}
+                ${vm.disks.overlay_bytes != null
+                    && button('Commit overlay', () => act('commit'))}
+                ${button('Back up disk', () => act('backup'))}
+                ${vm.disks.backup_bytes != null
+                    && button('Restore backup', () => act('restore'),
+                        'danger')}`}
+            ${vmRun && html`<button class="link-button"
+                onClick=${() => showRun(vmRun.run_id)}>${isBusy
+                    ? `${vmRun.label}…` : `last: ${vmRun.label} (${
+                        vmRun.state})`}</button>`}
+        </div>
+        ${form && html`<${StartForm} vm=${vm} action=${form}
+            onSubmit=${(options) => act(form, options)}
+            onCancel=${() => setForm(null)} />`}
+        ${error && html`<div class="error-text">${error}</div>`}`;
+}
+
+function VmSection({ machineId, vm, vmRun, guestLabel }) {
     if (!vm) {
         return html`<div class="section"><div class="section-head">
             <span>Virtual machine</span></div>
@@ -233,6 +344,7 @@ function VmSection({ vm, guestLabel }) {
                         ].join(' · ')}</span>`
                     : html`<span class="pill">Stopped</span>`}
             </div>
+            <${VmActions} machineId=${machineId} vm=${vm} vmRun=${vmRun} />
             <dl class="kv">
                 ${vm.is_running && html`
                     <dt>Networks</dt><dd>${networks.join(', ') || '–'}</dd>
@@ -351,8 +463,9 @@ function MachineCard({ entry, machinesById, reference, now }) {
                     <button class="icon-button"
                         onClick=${() => postReconnect(machine.id)}>
                         Retry</button>`}
-                ${isOnline && html`<span class="pill">${connection.state}
-                    </span>`}
+                ${isOnline && html`<button class="icon-button"
+                    title="Open a shell on this machine"
+                    onClick=${() => openTerminal(machine.id)}>Terminal</button>`}
             </header>
             <${ConnectionRow} connection=${connection} info=${info} />
             <${OfflineNotice} machineId=${machine.id} connection=${connection}
@@ -373,7 +486,8 @@ function CardBody({ entry, guestEntry, reference, now }) {
                 path=${machine.workspace} workspace=${workspace}
                 reference=${reference} isReference=${machine.is_local}
                 now=${now} />`}
-            ${machine.vm && isOnline && html`<${VmSection} vm=${vm}
+            ${machine.vm && isOnline && html`<${VmSection}
+                machineId=${machine.id} vm=${vm} vmRun=${entry.vmRun}
                 guestLabel=${guestEntry && guestEntry.machine.label} />`}`;
 }
 
@@ -426,12 +540,28 @@ function Summary({ machines }) {
         </div>`;
 }
 
+// The newest VM action run per host machine.
+function latestVmRuns(runs) {
+    const latest = {};
+    for (const run of runs) {
+        if (run.kind !== 'vm') continue;
+        const current = latest[run.scenario_id];
+        if (!current || run.started_s > current.started_s) {
+            latest[run.scenario_id] = run;
+        }
+    }
+    return latest;
+}
+
 export function MachinesView({ state, now }) {
-    const machinesById = Object.fromEntries(
-        state.machines.map((entry) => [entry.machine.id, entry]));
+    const vmRuns = latestVmRuns(state.runs);
+    const machinesById = Object.fromEntries(state.machines.map((entry) =>
+        [entry.machine.id, { ...entry, vmRun: vmRuns[entry.machine.id] }]));
     const local = machinesById.local;
     const reference = local && local.workspace && local.workspace.fingerprint;
-    const groups = groupMachines(state.machines, machinesById);
+    const groups = groupMachines(
+        state.machines.map((entry) => machinesById[entry.machine.id]),
+        machinesById);
     const card = (entry) => html`<${MachineCard} key=${entry.machine.id}
         entry=${entry} machinesById=${machinesById}
         reference=${reference} now=${now} />`;
@@ -439,7 +569,9 @@ export function MachinesView({ state, now }) {
         <div class="page-head">
             <div>
                 <h1>Machines</h1>
-                <p>Every machine in the inventory, live over SSH.</p>
+                <p>Every machine in the inventory, live over SSH.${' '}
+                    <a class="link-button" href="#/machines/edit">
+                        Edit machines</a></p>
             </div>
             <${Summary} machines=${state.machines} />
         </div>

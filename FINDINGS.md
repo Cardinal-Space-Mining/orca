@@ -30,10 +30,12 @@ hub avoids it; the underlying issue is still there).
 
 | # | Where | Finding | Status |
 |---|---|---|---|
-| V1 | `run-vm.sh` `create_or_reuse_overlay interactive` | `--startd`, `--restartd` and `--term` prompt with `read` when an overlay exists. Without a terminal, `read` hits EOF and `set -e` aborts the script. | open |
-| V2 | `run-vm.sh` `run_daemon` | Calls `sudo -v`, which asks for a password even when the user has passwordless sudo for specific commands (sudoers `verifypw` defaults to `all`). | open |
-| V3 | `run-vm.sh` | Doesn't set `PATH`. Over non-interactive SSH on macOS, `/opt/homebrew/bin` isn't on `PATH` (zsh reads `.zprofile` only for login shells), so `qemu-img`, `qemu-system-aarch64`, `socat` and `pv` aren't found. | open |
+| V1 | `run-vm.sh` `create_or_reuse_overlay interactive` | `--startd`, `--restartd` and `--term` prompt with `read` when an overlay exists. Without a terminal, `read` hits EOF and `set -e` aborts the script. | fixed in csm-vm (uncommitted; copied to the M2 mac): `--overlay` (commit, reuse or discard), and a clear error instead of a silent abort without a terminal |
+| V2 | `run-vm.sh` `run_daemon` | Calls `sudo -v`, which asks for a password even when the user has passwordless sudo for specific commands (sudoers `verifypw` defaults to `all`). | fixed in csm-vm (uncommitted): `sudo -v` only with a terminal; otherwise it checks passwordless sudo for QEMU up front |
+| V3 | `run-vm.sh` | Doesn't set `PATH`. Over non-interactive SSH on macOS, `/opt/homebrew/bin` isn't on `PATH` (zsh reads `.zprofile` only for login shells), so `qemu-img`, `qemu-system-aarch64`, `socat` and `pv` aren't found. | fixed in csm-vm (uncommitted): run-vm.sh adds Homebrew to PATH |
 | V4 | `docs/vm-management.md` | Lists a `MAC` variable; the script uses `MAC_BRIDGE`, `MAC_HOST` and `MAC_WIFI`. | open |
+| V5 | `run-vm.sh` `run_daemon` | Started QEMU in the background and returned success without checking it was running, so a failed start looked like success. | fixed in csm-vm (uncommitted): waits 3 s and reports |
+| V6 | `run-vm.sh` daemon/launchd modes | No serial console: the only way into a VM with broken networking was stopping it and restarting with `--term`. | fixed in csm-vm (uncommitted): serial port on `/tmp/qemu-serial.sock` |
 
 ## Test machines (M2 mac mini + VM)
 
@@ -49,3 +51,5 @@ hub avoids it; the underlying issue is still there).
 | M8 | Mac, VM | Clocks differ from the dev machine by about −22 ms (mac) and +11 ms (VM), measured over 2–4 ms round trips. Fine for humans; worth knowing when lining up bags or logs from several machines. | info |
 | M9 | VM | `~/lance-ws` had 5 git stashes from February 2026 that exist only there (`git stash list`). The hub's first deploy (2026-11-24) kept them. | info |
 | M10 | VM | `~/lance-ws` was deployed from the dev machine on 2026-11-24 (branch `support-multiscan-refactor`, built for LANCE-2 only); it was on `main` @ a9498e4. | info |
+| M11 | VM | Right after a (re)start the VM's clock is about half a second behind until NTP syncs (the hub showed −497 ms). Matters when lining up bags recorded right after boot. | info |
+| M12 | M2 mac | The VM was restarted from the hub on 2026-11-24 to get a serial console (overlay committed on shutdown, USB Wi-Fi passed through again). `~/code/csm-vm/run-vm.sh` there is the updated, uncommitted version. | info |

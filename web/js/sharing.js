@@ -21,7 +21,7 @@ function canShare(entry) {
 
 // --- Helper ------------------------------------------------------------------
 
-function HelperNotice({ machineId, status }) {
+export function HelperNotice({ machineId, status }) {
     const [isChecking, setIsChecking] = useState(false);
     let message;
     if (!status.helper_installed) {
@@ -63,7 +63,7 @@ function HelperNotice({ machineId, status }) {
         </div>`;
 }
 
-function isReady(status) {
+export function isReady(status) {
     return status.helper_installed && status.helper_current
         && status.sudo_ok && status.dnsmasq_installed;
 }

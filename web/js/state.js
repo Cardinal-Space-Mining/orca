@@ -160,6 +160,8 @@ export function useOrchestratorState() {
         });
         on('settings', (settings) => setState((previous) => previous
             && { ...previous, settings }));
+        on('network', (network) => setState((previous) => previous
+            && { ...previous, network }));
         on('budget', (budget) => setState((previous) => previous
             && { ...previous, budget: mergeBudget(previous.budget, budget) }));
         on('run', (run) => setState((previous) => replaceRun(previous, run)));

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import socket
 from typing import Optional
@@ -19,6 +20,7 @@ from .budget import MONITOR_PROCESS_ID, BudgetTracker
 from .deploy import Deployer
 from .discovery import Discovery
 from .link import MachineLink
+from .network_map import DeviceBook, buildNetworkModel
 from .runs import PlanError, Planner, Run, expandHome, newRunId
 from .settings import loadSettings, mergeDefaults, saveSettings
 from .scenarios import loadScenarios
@@ -33,6 +35,7 @@ AGENT_SOURCE_PATH = os.path.join(ORCHESTRATOR_ROOT, 'agent',
 MONITOR_SOURCE_PATH = os.path.join(ORCHESTRATOR_ROOT, 'backend',
                                    'ros_monitor.py')
 SUBSCRIBER_QUEUE_SIZE = 5000
+NETWORK_PUBLISH_PERIOD_S = 2.0
 MAX_FINISHED_RUNS = 20
 
 
@@ -57,6 +60,8 @@ class Orchestrator:
         self.sharing = Sharing(self)
         self.discovery = Discovery(self)
         self.setup = Setup(self)
+        self.devices = DeviceBook()
+        self.network_json = None
         self.lance_config = None
         self.lance_config_error = None
 
@@ -71,7 +76,46 @@ class Orchestrator:
         self.stop_event = asyncio.Event()
         for link in self.links:
             link.start()
-        await self.stop_event.wait()
+        publisher = asyncio.ensure_future(self.publishNetwork())
+        try:
+            await self.stop_event.wait()
+        finally:
+            publisher.cancel()
+
+    # --- The network map ---
+
+    def noteScan(self, machine_id: str, result: dict):
+        '''Devices a scan found go on the map.'''
+        for host in result.get('hosts', []):
+            self.devices.see(host.get('mac'), host['address'], 'scan',
+                             host.get('name'), machine_id)
+
+    def networkModel(self) -> dict:
+        try:
+            config = self.lanceConfig()
+            constants = config.addressConstants() if config else {}
+        except ConfigError:
+            constants = {}
+        return buildNetworkModel(
+            [link.snapshot() for link in self.links],
+            self.devices.snapshot(), constants,
+            self.settings['budget'].get('interface'))
+
+    async def publishNetwork(self):
+        '''Send the map when it changes (traffic rates change it every few
+        seconds while anything is moving).'''
+        while True:
+            await asyncio.sleep(NETWORK_PUBLISH_PERIOD_S)
+            try:
+                model = self.networkModel()
+            except Exception as error:  # keep the loop alive; show why
+                print('[ORCHESTRATOR]: network map failed: %r' % error,
+                      flush=True)
+                continue
+            encoded = json.dumps(model, sort_keys=True)
+            if encoded != self.network_json:
+                self.network_json = encoded
+                self.publish('network', model)
 
     # --- Lookups ---
 
@@ -141,6 +185,7 @@ class Orchestrator:
             'runs': [run.snapshot() for run in self.runs.values()],
             'settings': self.settings,
             'budget': self.budget.snapshot(with_history=True),
+            'network': self.networkModel(),
         }
 
     # --- Machines ---

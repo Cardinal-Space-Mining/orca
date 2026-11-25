@@ -33,6 +33,7 @@ VM_PERIOD_S = (5.0, 15.0)
 SHARING_PERIOD_S = (5.0, 15.0)
 # Setup changes rarely; fixes re-check when their terminal closes.
 SETUP_PERIOD_S = (300.0, 1800.0)
+NEIGHBOUR_PERIOD_S = (30.0, 300.0)
 WORKSPACE_PERIOD_S = (30.0, 120.0)
 STREAM_LIMIT_BYTES = 16 * 1024 * 1024
 ROUTE_STAGGER_S = 0.4
@@ -618,7 +619,8 @@ class MachineLink:
     def pollTasks(self) -> list:
         tasks = [self.poll(PING_PERIOD_S, self.measureLatency),
                  self.poll(SHARING_PERIOD_S, self.refreshSharing),
-                 self.poll(SETUP_PERIOD_S, self.refreshSetup)]
+                 self.poll(SETUP_PERIOD_S, self.refreshSetup),
+                 self.poll(NEIGHBOUR_PERIOD_S, self.refreshNeighbours)]
         if not self.machine.is_local:
             tasks.append(self.preferEarlierRoutes())
         if self.machine.workspace:
@@ -706,6 +708,13 @@ class MachineLink:
         self.state['workspace'] = await self.call(
             'workspace.status', {'path': self.machine.workspace})
         self.publish()
+
+    async def refreshNeighbours(self):
+        '''Devices this machine has talked to, for the network map.'''
+        neighbours = await self.call('net.neighbours')
+        for address, mac in neighbours.items():
+            self.orchestrator.devices.see(mac, address, 'neighbour',
+                                          seen_by=self.machine.id)
 
     async def refreshSetup(self):
         await self.orchestrator.setup.refresh(self)

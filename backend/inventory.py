@@ -126,6 +126,7 @@ class Machine:
     config_addresses: dict = field(default_factory=dict)
     # What else it needs set up (setup.py): "can", "sharing"
     setup: list = field(default_factory=list)
+    icon: Optional[str] = None  # map icon, when the guess is wrong
 
     def identity(self) -> Optional[str]:
         '''The known_hosts name that proves a connection reached this
@@ -151,6 +152,7 @@ class Machine:
             'source': self.source,
             'config_addresses': self.config_addresses,
             'setup': self.setup,
+            'icon': self.icon,
         }
 
 
@@ -216,6 +218,7 @@ def parseMachine(entry: dict, source: str) -> Machine:
         host_key_alias=entry.get('host_key_alias'),
         config_addresses=parseConfigAddresses(entry, machine_id),
         setup=parseSetup(entry, machine_id),
+        icon=entry.get('icon'),
     )
 
 

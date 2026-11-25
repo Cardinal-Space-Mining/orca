@@ -28,7 +28,7 @@ const PORT_PRESETS = [
 
 // --- Formatting --------------------------------------------------------------
 
-function formatKbps(kbps) {
+export function formatKbps(kbps) {
     if (kbps == null) return '–';
     if (kbps >= 10000) return `${(kbps / 1000).toFixed(1)} Mbps`;
     if (kbps > 0 && kbps < 10) return `${kbps.toFixed(1)} kbps`;
@@ -72,7 +72,7 @@ function useWidth(reference) {
 
 // --- Competition mode --------------------------------------------------------
 
-function CompetitionPanel({ state }) {
+export function CompetitionPanel({ state }) {
     const isOn = state.settings.competition_mode;
     const orchestratorKbps = state.machines.reduce((total, entry) =>
         total + (entry.machine.is_local ? 0
@@ -103,7 +103,7 @@ function CompetitionPanel({ state }) {
 
 // --- Budget: meter and tiles -------------------------------------------------
 
-function BudgetMeter({ budget }) {
+export function BudgetMeter({ budget }) {
     const primary = budget.sources.interface.average_kbps != null
         ? 'interface' : 'net_adapter';
     const average = budget.sources[primary].average_kbps;
@@ -434,7 +434,7 @@ function BudgetSources({ state }) {
         </div>`;
 }
 
-function BudgetPanel({ state, now }) {
+export function BudgetPanel({ state, now }) {
     const budget = state.budget;
     return html`
         <section class="panel">
@@ -461,7 +461,7 @@ function BudgetPanel({ state, now }) {
 
 // --- Traffic and Wi-Fi -------------------------------------------------------
 
-function Sparkline({ points }) {
+export function Sparkline({ points }) {
     if (points.length < 2) return html`<span class="faint">–</span>`;
     const width = 120;
     const height = 26;
@@ -475,7 +475,7 @@ function Sparkline({ points }) {
         <path d=${d} /></svg>`;
 }
 
-function TrafficPanel({ state }) {
+export function TrafficPanel({ state }) {
     const rows = [];
     for (const entry of state.machines) {
         if (entry.connection.state !== 'online' || !entry.stats) continue;
@@ -519,7 +519,7 @@ function TrafficPanel({ state }) {
         </section>`;
 }
 
-function WifiPanel({ state }) {
+export function WifiPanel({ state }) {
     const rows = [];
     for (const entry of state.machines) {
         for (const iface of (entry.stats || {}).interfaces || []) {
@@ -573,10 +573,11 @@ function defaultNetwork(entry) {
     return `${address.split('.').slice(0, 3).join('.')}.0/24`;
 }
 
-function ToolsPanel({ state }) {
+export function ToolsPanel({ state, machineId: initialMachineId = 'local',
+    title = 'Tools' }) {
     const online = state.machines.filter((entry) =>
         entry.connection.state === 'online');
-    const [machineId, setMachineId] = useState('local');
+    const [machineId, setMachineId] = useState(initialMachineId);
     const source = online.find((entry) => entry.machine.id === machineId)
         || online[0];
     const [host, setHost] = useState('');
@@ -619,7 +620,7 @@ function ToolsPanel({ state }) {
 
     return html`
         <section class="panel">
-            <h2>Tools</h2>
+            <h2>${title}</h2>
             <p class="muted">Run from any machine: what it can reach is what the
                 robot code on it can reach.</p>
             <div class="fields">
@@ -735,14 +736,10 @@ function ToolResult({ result, knownAddresses }) {
 
 // --- Page --------------------------------------------------------------------
 
-export function NetworkView({ state, now }) {
+// Everything that used to be the network page, below the machine cards in
+// the list view.
+export function NetworkPanels({ state, now }) {
     return html`
-        <div class="page-head"><div>
-            <h1>Network</h1>
-            <p>The robot's link: bandwidth against the competition limit,
-                internet sharing over Ethernet, live traffic, Wi-Fi, and tools
-                to find and test machines.</p>
-        </div></div>
         <div class="stack">
             <${CompetitionPanel} state=${state} />
             <${SharingPanel} state=${state} now=${now} />

@@ -356,9 +356,11 @@ class HttpServer:
                 'host': body['host'], 'port': int(body['port'])},
                 timeout_s=30.0)
         if tool == 'scan':
-            return await link.call('net.scan', {
+            result = await link.call('net.scan', {
                 'cidr': body['cidr'], 'ports': body.get('ports') or [22]},
                 timeout_s=120.0)
+            self.orchestrator.noteScan(machine_id, result)
+            return result
         return None
 
     async def answerDiscovery(self, request: Request, action: str):

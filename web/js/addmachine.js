@@ -195,8 +195,9 @@ function QuickShare({ state }) {
             Share this laptop's internet on that port: the machine gets an
             address and shows up here.</p>
         ${!isReady && html`<div class="console-note">Sharing isn't set up on
-            this laptop yet: <a class="link-button" href="#/network">Network
-            → Internet sharing</a>.</div>`}
+            this laptop yet: install the helper from${' '}<a
+            class="link-button" href="#/machines/list">Network → List →
+            Internet sharing</a>.</div>`}
         ${isReady && ports.length === 0 && html`<div class="console-note">
             No free Ethernet port on this laptop (a USB adapter works).</div>`}
         ${isReady && ports.length > 0 && html`<div class="fields">

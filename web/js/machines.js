@@ -514,7 +514,7 @@ function LastSeen({ addresses, now }) {
         </div>`;
 }
 
-function MachineCard({ entry, machinesById, reference, now }) {
+export function MachineCard({ entry, machinesById, reference, now }) {
     const { machine, connection, info, stats, workspace, vm } = entry;
     const isOnline = connection.state === 'online';
     const hostEntry = machine.host && machinesById[machine.host];
@@ -601,7 +601,7 @@ function groupMachines(entries, machinesById) {
         ...groups.filter((group) => !isOnline(group))];
 }
 
-function Summary({ machines }) {
+export function Summary({ machines }) {
     const numOnline = machines.filter((entry) =>
         entry.connection.state === 'online').length;
     const numVmsRunning = machines.filter((entry) =>
@@ -616,7 +616,7 @@ function Summary({ machines }) {
 }
 
 // The newest VM action run per host machine.
-function latestVmRuns(runs) {
+export function latestVmRuns(runs) {
     const latest = {};
     for (const run of runs) {
         if (run.kind !== 'vm') continue;
@@ -628,10 +628,16 @@ function latestVmRuns(runs) {
     return latest;
 }
 
-export function MachinesView({ state, now }) {
+// Machines by id, with the VM run each host has going (for its card).
+export function machinesWithRuns(state) {
     const vmRuns = latestVmRuns(state.runs);
-    const machinesById = Object.fromEntries(state.machines.map((entry) =>
+    return Object.fromEntries(state.machines.map((entry) =>
         [entry.machine.id, { ...entry, vmRun: vmRuns[entry.machine.id] }]));
+}
+
+// The list view: one card per machine, a mac and its VM side by side.
+export function MachineGrid({ state, now }) {
+    const machinesById = machinesWithRuns(state);
     const local = machinesById.local;
     const reference = local && local.workspace && local.workspace.fingerprint;
     const groups = groupMachines(
@@ -641,16 +647,6 @@ export function MachinesView({ state, now }) {
         entry=${entry} machinesById=${machinesById}
         reference=${reference} now=${now} />`;
     return html`
-        <div class="page-head">
-            <div>
-                <h1>Machines</h1>
-                <p>Every machine in the inventory, live over SSH.${' '}
-                    <a class="link-button" href="#/machines/add">
-                        Add a machine</a>${' · '}<a class="link-button"
-                        href="#/machines/edit">Edit machines</a></p>
-            </div>
-            <${Summary} machines=${state.machines} />
-        </div>
         <div class="machine-grid">
             ${groups.map((group) => group.length === 1 ? card(group[0])
                 : html`<div class="group" key=${group[0].machine.id}>
@@ -659,7 +655,13 @@ export function MachinesView({ state, now }) {
                     }</div>
                     ${group.map(card)}
                 </div>`)}
-        </div>
+        </div>`;
+}
+
+// Where the inventory comes from and the agent version, at the bottom of
+// the page.
+export function InventoryFooter({ state }) {
+    return html`
         <footer>
             ${state.orchestrator.inventory_paths.map((entry) => html`
                 <span>inventory <span class="mono">${entry.path}</span>

@@ -4,6 +4,7 @@
 import { h } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import htm from 'htm';
+import { ICONS } from '../vendor/lucide-icons.js';
 
 export const html = htm.bind(h);
 
@@ -82,6 +83,27 @@ export async function postJson(path, body = {}) {
 
 
 // --- Small components --------------------------------------------------------
+
+// A Lucide icon by name (web/vendor/lucide-icons.js), sized to the text.
+export function Icon({ name, size = 16, title, ...props }) {
+    const markup = ICONS[name] || ICONS['circle-help'];
+    return html`<svg class="icon" width=${size} height=${size}
+        viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+        aria-hidden=${title ? null : 'true'} role=${title ? 'img' : null}
+        ...${props} dangerouslySetInnerHTML=${{ __html: (title
+            ? `<title>${title}</title>` : '') + markup }}></svg>`;
+}
+
+// Icons for machine kinds (network_map.py machineKind) and port kinds.
+export const MACHINE_ICONS = {
+    mac: 'apple', vm: 'box', robot: 'bot', laptop: 'laptop',
+    desktop: 'monitor', board: 'microchip', computer: 'server',
+};
+export const PORT_ICONS = {
+    'Ethernet': 'ethernet-port', 'USB Ethernet': 'usb', 'Wi-Fi': 'wifi',
+    'Bridge': 'arrow-left-right', 'CAN': 'cable',
+};
 
 export function StatusDot({ state }) {
     const level = {

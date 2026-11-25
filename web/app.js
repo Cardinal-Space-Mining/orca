@@ -3,9 +3,8 @@
 
 import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { html, shortCommit } from './js/common.js';
+import { html, Icon, postJson, shortCommit } from './js/common.js';
 import { useOrchestratorState, useNow } from './js/state.js';
-import { MachinesView } from './js/machines.js';
 import { LaunchView } from './js/launch.js';
 import { RunsView, isRunActive } from './js/runs.js';
 import { ConfigView } from './js/config.js';
@@ -15,25 +14,31 @@ import { LogsView } from './js/logs.js';
 import { InventoryView } from './js/inventory.js';
 import { AddMachineView } from './js/addmachine.js';
 import { TerminalDock } from './js/terminals.js';
-import { NetworkView } from './js/network.js';
+import { NetworkPage, preferredView } from './js/networkpage.js';
 
 
 const TABS = [
-    { id: 'machines', label: 'Machines' },
-    { id: 'launch', label: 'Launch' },
-    { id: 'runs', label: 'Runs' },
-    { id: 'deploy', label: 'Deploy' },
-    { id: 'bags', label: 'Bags' },
-    { id: 'logs', label: 'Logs' },
-    { id: 'config', label: 'Config' },
-    { id: 'network', label: 'Network' },
+    { id: 'machines', label: 'Network', icon: 'network' },
+    { id: 'launch', label: 'Launch', icon: 'rocket' },
+    { id: 'runs', label: 'Runs', icon: 'activity' },
+    { id: 'deploy', label: 'Deploy', icon: 'upload' },
+    { id: 'bags', label: 'Bags', icon: 'archive' },
+    { id: 'logs', label: 'Logs', icon: 'scroll-text' },
+    { id: 'config', label: 'Config', icon: 'sliders-horizontal' },
 ];
 
-// The open tab lives in the URL (#/runs/<run id>) so a reload keeps it.
+// The open tab lives in the URL (#/runs/<run id>, #/machines/map/<what is
+// selected>) so a reload keeps it. #/network is the old network page.
 function readLocation() {
-    const [tab, detail] = window.location.hash.replace(/^#\/?/, '').split('/');
+    const [rawTab, detail, ...rest] = window.location.hash
+        .replace(/^#\/?/, '').split('/');
+    const tab = rawTab === 'network' ? 'machines' : rawTab;
     const known = TABS.some((entry) => entry.id === tab && !entry.soon);
-    return { tab: known ? tab : 'machines', detail: detail || null };
+    return {
+        tab: known ? tab : 'machines',
+        detail: rawTab === 'network' ? 'list' : detail || null,
+        rest: rest.length ? decodeURIComponent(rest.join('/')) : null,
+    };
 }
 
 function useLocation() {
@@ -50,6 +55,26 @@ function useLocation() {
 }
 
 
+// Competition mode: less orchestrator traffic on the robot's link (slower
+// status, no live output from other machines).
+function CompetitionSwitch({ state }) {
+    const isOn = state.settings.competition_mode;
+    const average = state.budget.sources.interface.average_kbps;
+    return html`
+        <button class="competition-switch ${isOn ? 'on' : ''}"
+            title=${isOn ? 'Competition mode is on: status every 10 s, output '
+                + 'from other machines only on request. Click to turn off.'
+                : "Competition mode: keep the orchestrator's own traffic on "
+                + "the robot's link small. Click to turn on."}
+            onClick=${() => postJson('/api/settings',
+                { competition_mode: !isOn })}>
+            <${Icon} name="trophy" size=${15} />
+            <span>Competition${isOn && average != null
+                ? ` · ${Math.round(average)} kbps avg` : ''}</span>
+            <span class="switch-knob"></span>
+        </button>`;
+}
+
 function TopBar({ state, isLive, tab, navigate }) {
     const local = state && state.machines.find((entry) => entry.machine.is_local);
     const workspace = local && local.workspace;
@@ -62,7 +87,8 @@ function TopBar({ state, isLive, tab, navigate }) {
                 ${TABS.map((entry) => html`
                     <button class="tab ${tab === entry.id ? 'active' : ''}"
                         disabled=${entry.soon}
-                        onClick=${() => navigate(entry.id)}>${entry.label}
+                        onClick=${() => navigate(entry.id)}><${Icon}
+                        name=${entry.icon} size=${15} />${entry.label}
                         ${entry.id === 'runs' && numActiveRuns > 0 && html`
                             <span class="badge">${numActiveRuns}</span>`}
                         ${entry.soon && html`<span class="soon">soon</span>`}
@@ -75,13 +101,7 @@ function TopBar({ state, isLive, tab, navigate }) {
                     <span class="mono">${workspace.branch} @ ${shortCommit(
                         workspace.head)}</span>
                 </div>`}
-            ${state && state.settings.competition_mode && html`
-                <a class="competition-pill" href="#/network"
-                    title=${'Competition mode: less orchestrator traffic on '
-                        + "the robot's link"}>
-                    Competition${state.budget.sources.interface.average_kbps
-                        != null ? ` · ${Math.round(state.budget.sources
-                            .interface.average_kbps)} kbps avg` : ''}</a>`}
+            ${state && html`<${CompetitionSwitch} state=${state} />`}
             <div class="live">
                 <span class="dot ${isLive ? 'good' : 'bad pulse'}"></span>
                 ${isLive ? 'Live' : 'Orchestrator disconnected'}
@@ -110,8 +130,6 @@ function Page({ state, location, navigate, now }) {
             return html`<${LogsView} state=${state}
                 selectedId=${location.detail} now=${now}
                 onSelect=${(machineId) => navigate('logs', machineId)} />`;
-        case 'network':
-            return html`<${NetworkView} state=${state} now=${now} />`;
         case 'config':
             return html`<${ConfigView} />`;
         default:
@@ -119,7 +137,11 @@ function Page({ state, location, navigate, now }) {
             if (location.detail === 'add') {
                 return html`<${AddMachineView} state=${state} />`;
             }
-            return html`<${MachinesView} state=${state} now=${now} />`;
+            return html`<${NetworkPage} state=${state} now=${now}
+                view=${['map', 'list'].includes(location.detail)
+                    ? location.detail : preferredView()}
+                selection=${location.detail === 'map' ? location.rest : null}
+                navigate=${navigate} />`;
     }
 }
 

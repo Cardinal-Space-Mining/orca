@@ -119,6 +119,10 @@ class Sharing:
                   for mac in book.macs(machine_id)}
         new_macs = []
         for session in status.get('sessions', []):
+            for lease in session.get('leases', []):
+                self.orchestrator.devices.see(
+                    lease['mac'], lease['address'], 'lease',
+                    lease.get('hostname'), link.machine.id)
             session['devices'] = devicesOn(session)
             for device in session['devices']:
                 device['machine_id'] = owners.get(device['mac'])

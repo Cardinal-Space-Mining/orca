@@ -20,13 +20,12 @@ CAN permissions): [docs/machine-setup.md](docs/machine-setup.md).
 
 | Page | What it does |
 |---|---|
-| Machines | Every machine: connection, load, network (incl. Wi-Fi channel), where an offline machine was last seen, whether it runs the same code as yours. A terminal on any machine; the VM on a mac host: start, shut down, restart, force stop, commit the overlay, back up, restore, and its serial console. **Add a machine** finds a new machine (scan, shared port or address), sets up SSH access and writes its entry; **Edit machines** changes the inventory files in the app. |
+| Network | Every machine and the networks between them, as a **map** (networks as lines, machines hanging from them by their ports, other devices on the lines; click anything for details) or a **list** of machine cards. A card: connection, load, network (incl. Wi-Fi channel), where an offline machine was last seen, whether it runs the same code as yours, its setup checklist, a terminal, and on a mac host its VM (start, shut down, restart, force stop, commit the overlay, back up, restore, serial console). Also the comm-link bandwidth budget, internet sharing over Ethernet, live traffic, Wi-Fi channels, and ping / port check / network scan from any machine. **Add a machine** finds a new machine (scan, shared port or address), sets up SSH access and writes its entry; **Edit machines** changes the inventory files in the app. |
 | Launch | Pick a scenario, assign machines to its roles, check the exact commands, launch. |
 | Runs | Everything launched, deployed or pulled, with live output per process (filter by text, level or node), stop all or one. |
 | Deploy | Push this workspace's `src/` to other machines and build there; compare first to see exactly what changes. |
 | Bags | Recordings on each machine with length, size and topics; pull them here, delete them there once pulled. |
 | Logs | Orchestrator run logs, each package's latest build log, ROS logs, the agent's and the VM autostart log, per machine. |
-| Network | The comm-link bandwidth budget (average against the guidebook's 4,000 kbps, per source and per topic), competition mode, internet sharing over Ethernet (with the devices that show up on the port), live traffic on every interface, Wi-Fi channels, and ping / port check / network scan from any machine. |
 | Config | Browse every action and preset of `lance/config`, what a preset inherits and enables, and try `key:=value` arguments without launching. |
 
 ## Machines
@@ -271,12 +270,49 @@ offered once an identical copy is here.
   Foxglove 8765) and a scan of a network (up to a /22) that lists who answers,
   with MAC addresses and which inventory machine each address belongs to.
 
+## The network map
+
+**Network → Map** draws every IP network the machines are on as a line, and
+each machine as a box hanging from the lines by its ports:
+
+- **Lines** are the local network (with its gateway, Wi-Fi name and the
+  internet), a share, a mac's host-only link to its VM, or any other network.
+  A line means "on the same IP network", not "cabled together": switches and
+  access points don't show up.
+- **Ports** sit on top of each box: Ethernet, USB Ethernet, Wi-Fi, bridges.
+  Traffic on a port shows as dashes moving along its line: faster the busier
+  it is, down for mostly incoming and up for mostly outgoing, glowing from
+  500 kbps. Red is the port measured as the robot's link, green a port
+  sharing internet, dashed an offline machine. Ports on no network are just
+  an icon; inactive ones are counted in the box.
+- **Other devices** come from the machines' neighbour tables (every 30 s),
+  DHCP leases of a share and scans; the lance config's address constants name
+  the ones it knows (10.11.10.3 shows up as "lidar"). Busy networks show the
+  router and named devices, and a count for the rest.
+- The map fits the window: columns widen, then the whole map scales to the
+  width it has.
+- **Click anything** for its panel (click it again to close it): a machine's full card (plus ping, port
+  check and scan from it), a network's machines and devices (scan it from any
+  machine on it; *Stop sharing*), a port's addresses, traffic and Wi-Fi channel
+  (*Measure as the robot's link*, *Share internet here*), a device (*Add as a
+  machine*). What's selected is in the URL, so a reload keeps it. The panel
+  opens below the map, or beside it on very wide screens; the button in its
+  header switches, and the choice is remembered.
+- Offline machines are listed below the map (a VM or host whose partner is
+  online stays on it), and the bandwidth budget sits above it while it's being
+  measured. **List** shows the machine cards and the full budget, sharing,
+  traffic, Wi-Fi and tools panels instead.
+
+The map's icon for a machine is a guess (mac, VM, robot computer, laptop,
+desktop, single-board computer); an inventory entry can set `"icon"` to fix
+it.
+
 ## Sharing internet over Ethernet
 
 In the pits the robot is plugged straight into the driver station, and the
-test bench often has no router either. **Network → Internet sharing** shares a
-Linux machine's internet with whatever is plugged into one of its Ethernet
-ports (a USB adapter is fine): devices get addresses by DHCP (default subnet
+test bench often has no router either. Click an Ethernet port on the Network
+map → **Share internet here** (or **Internet sharing** in the List view) to
+share a Linux machine's internet with whatever is plugged into that port (a USB adapter is fine): devices get addresses by DHCP (default subnet
 10.11.11.0/24, or the next free 10.11.x.0/24 if that one is in use) and the
 machine routes their traffic out through whatever connection it has.
 
@@ -357,7 +393,7 @@ temporary directory.
 | 8 | Setup checklist per machine: checked without sudo, fixed by scripts run in a terminal there | done |
 | 9 | Configurability: edit scenarios, launch-config presets (with descriptions) and orchestrator settings in the app | next |
 | 10 | Native macOS processes | |
-| later | Network map on the machines page (adapters, links with live traffic, discovery in place); icons throughout | |
+| 8b | Network map: the Machines and Network pages merged; networks, ports with live traffic, devices and discovery on one diagram; icons throughout | done |
 
 Bugs and inconsistencies found along the way, in this and other repos, are
 logged in [FINDINGS.md](FINDINGS.md). Test rig setup: [docs/dev-rig-setup.md](

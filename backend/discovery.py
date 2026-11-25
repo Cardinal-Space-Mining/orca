@@ -139,6 +139,7 @@ class Discovery:
         link = self.orchestrator.link(machine_id)
         result = await link.call('net.scan', {
             'cidr': cidr, 'ports': [22], 'timeout_s': 0.8}, timeout_s=90)
+        self.orchestrator.noteScan(machine_id, result)
         by_mac, by_address = self.knownMachines()
         local_networks = [interface.network for interface
                           in self.orchestrator.finder.localInterfaces()]

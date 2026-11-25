@@ -1,9 +1,13 @@
-# Preparing a machine for the orchestrator
+# Preparing a machine for Orca
 
-What a robot computer, VM host or driver station needs before the orchestrator
-can manage it. Do it once per machine (and the SSH key part once per operator
-laptop). Machines are listed in `src/project/orca/machines.json`; see
-the [README](../README.md#machines).
+What a robot computer, VM host or driver station needs before Orca (the
+orchestrator) can manage it. Do it once per machine, and the SSH key part once
+per operator laptop. The team's machines are listed in the robot workspace,
+`<ws>/src/project/orca/machines.json` (lance-2026); see the
+[README](../README.md#machines).
+
+"Operator laptop" is the computer that runs Orca; every other machine only
+needs SSH and Python, as below.
 
 ## Every machine
 
@@ -11,7 +15,7 @@ After that, the machine card's **Setup** list checks everything below and
 has a **Fix** button for most of it (a script run in a terminal on the
 machine, where you type the sudo password). This page is the manual version.
 
-**Machines → Add a machine** does steps 1 and 3 for a new machine: it finds
+**Network → Add a machine** does steps 1 and 3 for a new machine: it finds
 the machine (network scan, a device plugged into a shared port, or an
 address), shows its host key to compare and trusts it, installs your SSH key
 (a terminal asks for the account's password once), connects, and proposes
@@ -98,8 +102,23 @@ Check with `sudo -n ip link show` (no password prompt) on the robot computer.
   Passwordless QEMU as root is close to passwordless root (QEMU can open any
   file as a disk), which is acceptable on a dedicated robot computer but worth
   knowing.
-- Then restart the VM once from the orchestrator (Machines → the mac's VM →
-  Restart): VMs started by an older run-vm.sh have no serial console.
-- Prefer the mac's IP addresses over `sams-mac-mini.local`-style names in the
+- Then restart the VM once from Orca (the mac's card on the Network page →
+  VM → Restart): VMs started by an older run-vm.sh have no serial console.
+- Prefer the mac's IP addresses over its `<name>.local` name in the
   inventory: with Wi-Fi and Ethernet on the same network, the `.local` name
-  can resolve to the slower Wi-Fi address.
+  can resolve to the Wi-Fi address only, and SSH over a mac's Wi-Fi has
+  ~100 ms of jittery latency (power saving) against ~2 ms over Ethernet.
+  Orca also tries the remembered Ethernet address.
+
+## Good to know
+
+- **macOS hides the Wi-Fi network name** (SSID) from programs without
+  Location Services access, which robot macs usually have turned off. Orca
+  still shows a mac's Wi-Fi channel, band and signal, just not the name.
+- **Clocks.** Machine cards show each machine's clock offset from the laptop.
+  A few tens of milliseconds is normal; right after a VM (re)starts it can be
+  about half a second behind until NTP syncs. Worth knowing when lining up
+  bags or logs from several machines.
+- **macOS's built-in rsync** is openrsync (protocol 29). Deploy targets are
+  the Ubuntu machines that run the robot code, so this only matters if you
+  push to a mac.

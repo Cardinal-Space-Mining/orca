@@ -23,7 +23,7 @@ DHCP leases are kept in /var/lib/orca-share/<name>.leases, so a device
 usually gets the same address next time.
 
 Usage:
-    orca-share up --name pits --downstream enx00e04c2646b5
+    orca-share up --name pits --downstream enx001122334455
         [--upstream wlp5s0] [--subnet 10.11.11.0/24] [--dns 8.8.8.8,1.1.1.1]
         [--lease 12h] [--keep-eee] [--allow-default-route]
     orca-share down --name pits

@@ -1,39 +1,84 @@
 # Orca
 
-Orca is the team's robot orchestrator: one place to run the robot. Which
-machines are up and what code they have, launching across several machines at
-once with live output, deploying and building code, pulling bags, reading
-logs, and browsing and editing the launch config.
-A web app served by a small Python program on your laptop; it talks to each
-machine through SSH, so nothing on the robot listens on the network.
+Orca is the robot orchestrator for [Cardinal Space Mining](
+https://github.com/Cardinal-Space-Mining)'s Lunabotics robots (LANCE-1 and
+LANCE-2): one place to run the robot from a laptop. It shows which machines are
+up and what code they have, launches across several machines at once with live
+output, deploys and builds code, pulls bags, reads logs, and browses and edits
+the launch config.
+
+It's a web app served by a small Python program on your laptop. It talks to
+each machine over SSH, so nothing on the robot listens on the network.
+
+## Where it fits
+
+Orca is a submodule of the robot workspace,
+[lance-2026](https://github.com/Cardinal-Space-Mining/lance-2026), checked out
+at `<ws>/src/orca` (where `<ws>` is the colcon workspace, normally
+`~/lance-ws`, and `<ws>/src` is the lance-2026 repo). It has a `COLCON_IGNORE`,
+so colcon doesn't build it. Orca's code is generic; what it knows about this
+robot comes from the workspace around it:
+
+| From the workspace | What Orca does with it |
+|---|---|
+| `src/project/orca/` | The team's machine inventory (`machines.json`), launch scenarios (`scenarios/`) and preset descriptions (`presets.json`). Versioned with the robot code. |
+| `src/run.sh`, `src/build.sh` | Launches run `./src/run.sh <flags> <key:=value...>` on a machine; Deploy runs `./src/build.sh` there. |
+| `src/lance/config/` and [launch-utils](https://github.com/Cardinal-Space-Mining/launch-utils) | The launch config: JSON *actions* (one component each) and *presets* (named settings of an action; *setups* like `robot:=lance2_ksc` select presets of other actions), resolved by launch-utils. Orca loads launch-utils from the workspace to preview and edit it. |
+| `src/sync.sh` | The team's older rsync deploy script; Orca's Deploy page follows its rules. |
+| `net_adapter` (in lance-2026) | The robot ↔ driver-station link over zenoh. Orca measures its bandwidth against the competition's budget. |
+| [csm-vm](https://github.com/Cardinal-Space-Mining/csm-vm) | Runs the robot's Ubuntu VM on its mac mini; Orca starts, stops and backs up the VM through its `run-vm.sh`. |
+
+Without a workspace (`--workspace` pointing nowhere, or Orca checked out on
+its own), the machine pages, terminals and network tools work; launching, the
+Config page and the team inventory need one.
+
+## Getting started
+
+**On the laptop that runs Orca:** Python 3.10+ (no packages to install;
+launch-utils needs 3.10) and the robot workspace:
 
 ```bash
+mkdir lance-ws && cd lance-ws
+git clone --recurse-submodules https://github.com/Cardinal-Space-Mining/lance-2026 src
 ./src/orca/orca      # from the workspace root; opens a browser tab
 ```
 
-Options: `--port 8740`, `--no-browser`, `--bind 127.0.0.1`,
-`--workspace <path>` (default: the workspace containing the orchestrator).
+Already have the workspace? `git -C src submodule update --init orca`. The
+workspace doesn't need to be built for Orca itself, only for what you launch
+on this laptop. Options: `--port 8740`, `--no-browser`,
+`--bind 127.0.0.1`, `--workspace <path>` (default: the workspace Orca is
+in). The port and whether a browser opens can also be set on the Settings
+page.
 
-**Requirements:** Python 3.10+ on the laptop (no packages to install;
-launch-utils, which Orca uses to read the launch config, needs 3.10) and SSH
-key access to each machine (`ssh-copy-id user@host`). Each managed machine
-needs `python3` 3.9+; macOS's built-in one is fine. One-time setup per machine (host keys,
-CAN permissions): [docs/machine-setup.md](docs/machine-setup.md).
+**On each machine it manages:** an SSH server, `python3` 3.9+ (macOS's
+built-in one is fine) and your laptop's SSH key. Orca installs its own agent
+over SSH; nothing else is installed by hand. Robot computers and VM hosts
+need some one-time setup (CAN and QEMU permissions, lingering):
+[docs/machine-setup.md](docs/machine-setup.md).
+
+**First run:** the Network page lists the team's machines from
+`src/project/orca/machines.json`. For each one you'll reach, trust its host
+key once (the card shows the fingerprint to compare) and make sure your SSH
+key is installed (`ssh-copy-id user@host`, or **Add a machine**, which does
+both). Machines of your own go in `~/.config/orca/machines.json` (see
+[Machines](#machines)). Then pick a scenario on the Launch page.
+
+## Pages
 
 | Page | What it does |
 |---|---|
 | Network | Every machine and the networks between them, as a **map** (networks as lines, machines hanging from them by their ports, other devices on the lines; click anything for details) or a **list** of machine cards. A card: connection, load, network (incl. Wi-Fi channel), where an offline machine was last seen, whether it runs the same code as yours, its setup checklist, a terminal, and on a mac host its VM (start, shut down, restart, force stop, commit the overlay, back up, restore, serial console). Also the comm-link bandwidth budget, internet sharing over Ethernet, live traffic, Wi-Fi channels, and ping / port check / network scan from any machine. **Add a machine** finds a new machine (scan, shared port or address), sets up SSH access and writes its entry; **Edit machines** changes the inventory files in the app. |
 | Launch | Pick a scenario, assign machines to its roles, check the exact commands, launch. |
 | Runs | Everything launched, deployed or pulled, with live output per process (filter by text, level or node), stop all or one. |
-| Deploy | Push this workspace's `src/` to other machines and build there; compare first to see exactly what changes. |
-| Bags | Recordings on each machine with length, size and topics; pull them here, delete them there once pulled. |
+| Deploy | Push your laptop's workspace (`<ws>/src`) to other machines and build there; compare first to see exactly what changes. |
+| Bags | Recordings on each machine with length, size and topics; pull them to your laptop, delete them on the machine once pulled. |
 | Logs | Orchestrator run logs, each package's latest build log, ROS logs, the agent's and the VM autostart log, per machine; delete logs, and clean up what piles up on each machine's disk. |
 | Config | Browse and edit every action and preset of `lance/config` (with descriptions), see what a preset inherits and enables, and try `key:=value` arguments without launching. |
 | Settings (gear) | Competition mode, the bandwidth budget, startup options, what the orchestrator remembers, and where its files are. |
 
 ## Machines
 
-**Add a machine** (on the Machines page) finds a new machine and writes its
+**Add a machine** (on the Network page) finds a new machine and writes its
 entry for you:
 
 1. **Find it**: scan a network from any connected machine (devices are listed
@@ -57,7 +102,7 @@ entries of the first by `id`):
 | File | For |
 |---|---|
 | `<workspace>/src/project/orca/machines.json` | The team's machines: robot, driver stations. Versioned with the code. |
-| `~/.config/orca/machines.json` | Your own machines, e.g. a test rig. |
+| `~/.config/orca/machines.json` | Your own machines, e.g. a bench setup at home. Only on your laptop. |
 
 Your own machine is always included as `local`. Example entry pair for a mac
 host and its VM:
@@ -122,7 +167,8 @@ with `visudo -c` before they're installed.
 
 ### Addresses change; machines are found anyway
 
-Every network here hands out addresses with DHCP, so the addresses in the
+Every network the robot meets (the team's, the competition's) hands out
+addresses with DHCP, so the addresses in the
 inventory are only a first guess. What identifies a machine is its **SSH host
 key**, checked under `host_key_alias` on every connection whatever address it
 used, so an address that now belongs to something else is never mistaken for
@@ -143,14 +189,16 @@ the machine.
 - Found routes are only tried once the machine's host key is trusted, so the
   first connection always goes through a route from the inventory.
 - **The robot code's addresses.** `lance/config` names machines by address
+  through constants in `lance/config/actions/shared.json`
   (`${ ip.net1.mac_vm_eth }`). `config_addresses` maps those constants to a
   machine's interfaces, and every launch from the orchestrator replaces them
   with the machine's current address, as seen from the machine the process runs
   on. The launch page lists each replacement. The values in `shared.json` only
   matter for launches started by hand.
 - `.local` names work as routes, but on a machine with Wi-Fi and Ethernet on
-  one network, mDNS may answer with the Wi-Fi address (FINDINGS.md, M6). The
-  remembered Ethernet address is tried as well.
+  one network, mDNS may answer with the Wi-Fi address only
+  ([docs/machine-setup.md](docs/machine-setup.md#macos-vm-hosts-robot-mac)).
+  The remembered Ethernet address is tried as well.
 
 ## Scenarios
 
@@ -185,7 +233,11 @@ the competition one, shortened:
 ```
 
 - `lance` processes run `./src/run.sh <flags> <key:=value...>` in the
-  machine's workspace; `command` processes run a shell command.
+  machine's workspace (lance-2026's launch script; `--canbus` brings CAN up,
+  `--local` keeps ROS traffic on the machine, and `robot:=lance2_ksc` picks
+  the LANCE-2 robot preset for the KSC arena); `command` processes run a
+  shell command. In the example, `redux` is the action that configures the
+  net_adapter endpoints, i.e. which address each side connects to.
 - `{ip:client}` is the client machine's address as seen from the machine the
   process runs on: the orchestrator picks one on a network both share
   (default-route interface first, Ethernet before Wi-Fi) and the launch page
@@ -270,13 +322,13 @@ before deleting, so nothing a running process uses goes.
 
 ## Deploying
 
-The Deploy page replaces `sync.sh push --ws` (and the build you'd run after
-it over SSH):
+The Deploy page replaces lance-2026's `./src/sync.sh push --ws` (and the
+build you'd run after it over SSH):
 
 - **Same code, checked by content.** Each machine reports a *fingerprint* of
   its workspace: the commit, uncommitted changes and the contents of
   untracked files, in the repo and every submodule. Machines with the same
-  fingerprint run the same code whatever their git history. The Machines page
+  fingerprint run the same code whatever their git history. The Network page
   shows *same code as orchestrator* / *different code*, and the launch page
   warns when the robot and the driver station differ (net_adapter's codec needs
   both sides deployed together).
@@ -284,7 +336,7 @@ it over SSH):
   changed, new and deleted, and any work on the target a push would
   overwrite (uncommitted changes there).
 - **Push** copies `src/` with sync.sh's rules (all of `src/` including `.git`,
-  never csm-sim; files deleted here are deleted there) and two differences:
+  never csm-sim; files deleted on your laptop are deleted there) and two differences:
   nothing inside `.git` is ever deleted on the target, so commits, branches
   and stashes that only exist there survive (sync.sh deletes them), and
   Python caches aren't copied.
@@ -292,9 +344,9 @@ it over SSH):
   the ROS distro the workspace was built against, for both robots or one
   (half the time). Pushes to several machines run in parallel.
 
-Bags are pulled into this workspace's `bag_recordings/` (like
+Bags are pulled into your workspace's `bag_recordings/` (like
 `sync.sh pull --bags`), resumably. Deleting a bag on the robot is only
-offered once an identical copy is here.
+offered once an identical copy is on your laptop.
 
 ## Terminals and the VM
 
@@ -313,8 +365,9 @@ offered once an identical copy is here.
 
 ## The robot's link
 
-- **Bandwidth budget.** The guidebook allows an average of 4,000 kbps on the
-  comm link over a run, minus 500 kbps per NASA camera switched on (14.1.18-19).
+- **Bandwidth budget.** The Lunabotics guidebook allows an average of
+  4,000 kbps on the comm link over a run, minus 500 kbps per NASA camera
+  switched on (rules 14.1.18-19).
   The Network page averages two measurements from when you press *Start a new
   average* (do it as a run starts):
   - **Radio link**: the byte counters of the robot's link interface (pick the
@@ -327,8 +380,8 @@ offered once an identical copy is here.
     `run.sh --local`.
 - **Competition mode** keeps the orchestrator's own traffic small: status every
   10 s, no live output from other machines (each console has *Fetch output
-  now*), slower background checks. Measured on the test rig: about 0.5 kbps to
-  the robot VM, against 5.5 kbps normally. The top bar shows it, with the
+  now*), slower background checks. Measured with a robot VM on its mac:
+  about 0.5 kbps, against 5.5 kbps normally. The top bar shows it, with the
   running average.
 - **Tools** run from any machine (what it can reach is what the robot code on
   it can reach): ping, TCP port check (SSH, zenoh 7447, lidar 2111,
@@ -435,22 +488,59 @@ machine routes their traffic out through whatever connection it has.
   `web/vendor/` (no build step, no internet needed). One module per page in
   `web/js/`; edit and reload.
 
-## Tests
+## Developing Orca
+
+- `orca` is the launcher (it runs `backend/__main__.py`), `backend/` the
+  server (a Python package),
+  `agent/` the agent copied to each machine plus the sharing helper, `web/`
+  the page (edit and reload; no build step), `tests/` the tests, `docs/` the
+  machine setup guide.
+- Standard library only, on both sides. The agent must keep running on
+  Python 3.9 (macOS's built-in one); the laptop side needs 3.10.
+- To try changes on real machines without the robot, put a bench setup (a
+  spare laptop, a mac running a csm-vm VM) in `~/.config/orca/machines.json`
+  and prepare it as in [docs/machine-setup.md](docs/machine-setup.md). Keep
+  test data small on VMs: their disks are 64 GB and backed up whole.
+
+### Tests
 
 ```bash
-cd src/orca && python3 -m unittest discover -s tests -t .
+cd <ws>/src/orca && python3 -m unittest discover -s tests -t .
 ```
 
-Standard library only. They cover scenario templates, the inventory, launch
-config overlays and preset editing (against your workspace's real config),
-rsync summaries, the bandwidth budget, the address book, and a real agent
-daemon started in a temporary directory.
+They cover scenario templates, the inventory, launch config overlays and
+preset editing (against the real config of the workspace around Orca; those
+tests are skipped without one), rsync summaries, the bandwidth budget, the
+address book, run start/stop order, the web server's request checks, and a
+real agent daemon started in a temporary directory (with a temporary home for
+the cleanup tests, so they never touch your real logs).
 
 GitHub Actions (`.github/workflows/tests.yaml`) runs them on every push and
 pull request to `main`: everything with the system `python3` of Ubuntu 22.04,
-24.04 and 26.04, inside a checkout of lance-2026 so the config tests run
-against its `main`; the agent's tests on Python 3.9 (the oldest a machine may
-have, macOS's built-in one); and a syntax check of every web module.
+24.04 and 26.04, inside a checkout of lance-2026's `main` so the config
+tests run too; the agent's tests on Python 3.9; and a syntax check of every
+web module.
+
+### History
+
+| Phase | What | State |
+|---|---|---|
+| 0 | Agent, inventory, machines view (status, network, workspace, VM) | done |
+| 1 | Scenarios and synchronized launch with output streaming; config browser; value overrides (IP pairing); host key trust | done |
+| 2 | Deploy (compare, push, remote build, code fingerprints), bags, logs | done |
+| 3 | VM control, terminals and serial console; editing the inventory in the app | done |
+| 4 | Network tools, bandwidth budget, competition mode; resizable, dockable terminals | done |
+| 5 | Addressing: machines found by host key, remembered addresses, neighbour matching and discovery; live addresses in launches; a test suite | done |
+| 6 | Internet sharing over Ethernet (replaces [netshare](https://github.com/S1ink/netshare)), with devices on the port matched to machines | done |
+| 7 | Add-machine wizard: discovery, host key and SSH key setup, entry from what the machine reports | done |
+| 8 | Setup checklist per machine: checked without sudo, fixed by scripts run in a terminal there | done |
+| 8b | Network map: the Machines and Network pages merged; networks, ports with live traffic, devices and discovery on one diagram; icons throughout | done |
+| 9 | Configurability: scenario editor (new, duplicate, edit, delete; checked as you type, launch previewed); launch-config preset editing with descriptions; Settings page | done |
+| 10 | Native macOS processes | |
+
+Bugs and inconsistencies found along the way in the repos Orca works with
+(lance-2026, launch-utils, csm-vm) are logged in [FINDINGS.md](FINDINGS.md)
+for their owners.
 
 ## Coming from the "orchestrator" names
 
@@ -473,24 +563,3 @@ git submodule sync orca && git submodule update --init orca
 rm -rf orchestrator   # the old checkout git leaves behind (check it has no
                       # uncommitted work first)
 ```
-
-## Status
-
-| Phase | What | State |
-|---|---|---|
-| 0 | Agent, inventory, machines view (status, network, workspace, VM) | done |
-| 1 | Scenarios and synchronized launch with output streaming; config browser; value overrides (IP pairing); host key trust | done |
-| 2 | Deploy (compare, push, remote build, code fingerprints), bags, logs | done |
-| 3 | VM control, terminals and serial console; editing the inventory in the app | done |
-| 4 | Network tools, bandwidth budget, competition mode; resizable, dockable terminals | done |
-| 5 | Addressing: machines found by host key, remembered addresses, neighbour matching and discovery; live addresses in launches; a test suite | done |
-| 6 | Internet sharing over Ethernet (replaces netshare), with devices on the port matched to machines | done |
-| 7 | Add-machine wizard: discovery, host key and SSH key setup, entry from what the machine reports | done |
-| 8 | Setup checklist per machine: checked without sudo, fixed by scripts run in a terminal there | done |
-| 9 | Configurability: scenario editor (new, duplicate, edit, delete; checked as you type, launch previewed); launch-config preset editing with descriptions; Settings page | done |
-| 10 | Native macOS processes | |
-| 8b | Network map: the Machines and Network pages merged; networks, ports with live traffic, devices and discovery on one diagram; icons throughout | done |
-
-Bugs and inconsistencies found along the way, in this and other repos, are
-logged in [FINDINGS.md](FINDINGS.md). Test rig setup: [docs/dev-rig-setup.md](
-docs/dev-rig-setup.md).

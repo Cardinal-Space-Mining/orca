@@ -412,8 +412,13 @@ class MachineLink:
                     await connection.close()
                 else:
                     errors.append((route, error))
+        # Probes still out may finish while the loop above awaited a close:
+        # cancelling a finished one does nothing, so close what they opened.
         for task in pending:
             task.cancel()
+        for result in await asyncio.gather(*pending, return_exceptions=True):
+            if isinstance(result, tuple) and result[1] is not None:
+                await result[1].close()
         if winner is None:
             self.recordRouteErrors(errors)
         return winner
@@ -635,6 +640,9 @@ class MachineLink:
                 await refresh()
             except (AgentError, ConnectionError, asyncio.TimeoutError):
                 pass
+            except Exception as error:  # a bug: keep polling, say what
+                print('[ORCA]: %s: %s failed: %r' % (
+                    self.machine.id, refresh.__name__, error), flush=True)
             await asyncio.sleep(self.period(periods))
 
     async def applySettings(self):
@@ -696,6 +704,8 @@ class MachineLink:
         '''Orca's own payload traffic with this machine since the
         last call (SSH adds a little on top).'''
         connection = self.connection
+        if connection is None:  # dropped while the ping was out
+            return None
         total = connection.bytes_received + connection.bytes_sent
         previous = self.traffic_sample
         self.traffic_sample = (now_s, total, connection)

@@ -40,6 +40,10 @@ class PlanError(Exception):
     pass
 
 
+class RunStopped(PlanError):
+    '''A process that wasn't started because its run was stopped.'''
+
+
 
 # --- Addresses ----------------------------------------------------------------
 
@@ -439,7 +443,8 @@ class Run:
             *(self.startWhenReady(entry) for entry in self.plan['processes']),
             return_exceptions=True)
         errors = [result for result in results
-                  if isinstance(result, Exception)]
+                  if isinstance(result, Exception)
+                  and not isinstance(result, RunStopped)]
         self.is_starting = False
         if errors:
             self.error = '; '.join(sorted({
@@ -451,8 +456,14 @@ class Run:
     async def startWhenReady(self, entry):
         try:
             await self.waitForDependencies(entry)
+            if self.is_stopping:
+                raise RunStopped('not started: the run was stopped')
             await self.startProcess(entry)
+            if self.is_stopping:  # stopped while this one was starting
+                await self.stopEntry(self.processes[entry['key']])
             self.publish()
+        except RunStopped:
+            raise
         except (AgentError, ConnectionError, asyncio.TimeoutError,
                 PlanError) as error:
             self.has_failed = True
@@ -463,7 +474,12 @@ class Run:
         deadline = time.time() + DEPENDENCY_TIMEOUT_S
         for dependency in entry['after']:
             dependency_entry = self.processes[dependency]
-            while not self.isDependencyMet(dependency_entry, entry):
+            while True:
+                # Stopping first: stopping makes dependencies exit.
+                if self.is_stopping:
+                    raise RunStopped('not started: the run was stopped')
+                if self.isDependencyMet(dependency_entry, entry):
+                    break
                 if self.has_failed and self.stop_on_failure:
                     raise PlanError('not started: another process failed')
                 if not dependency_entry['task'] and time.time() > deadline:
@@ -517,7 +533,8 @@ class Run:
 
     async def stop(self):
         '''Stop in reverse start order, so the robot goes down after the
-        driver station that commands it.'''
+        driver station that commands it. Processes still waiting to start
+        don't start (startWhenReady checks is_stopping).'''
         self.is_stopping = True
         self.publish()
         # By actual start time: a run recovered after an Orca restart
@@ -528,18 +545,24 @@ class Run:
                 'started_s') or 0)
         for key in newest_first:
             entry = self.processes[key]
-            record = entry['record']
-            if not record or record['state'] == 'exited':
-                continue
-            link = self.orca.links_by_id.get(entry['machine_id'])
-            if link is None or link.connection is None:
-                continue
-            try:
-                await link.call('process.stop',
-                                {'process_id': entry['process_id']})
-            except (AgentError, ConnectionError, asyncio.TimeoutError):
-                pass
-            await asyncio.sleep(STOP_SPACING_S)
+            if await self.stopEntry(entry):
+                await asyncio.sleep(STOP_SPACING_S)
+
+    async def stopEntry(self, entry) -> bool:
+        '''Ask its agent to stop one process; False if there was nothing to
+        stop or no way to reach it.'''
+        record = entry['record']
+        if not record or record['state'] == 'exited':
+            return False
+        link = self.orca.links_by_id.get(entry['machine_id'])
+        if link is None or link.connection is None:
+            return False
+        try:
+            await link.call('process.stop',
+                            {'process_id': entry['process_id']})
+        except (AgentError, ConnectionError, asyncio.TimeoutError):
+            pass
+        return True
 
     # --- Agent updates ---
 

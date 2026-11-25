@@ -1,10 +1,11 @@
 // The Settings page: Orca's own settings (competition mode, the
-// bandwidth budget, how it starts), what it has remembered, and where its
-// files are.
+// bandwidth budget, how it starts), this browser's theme, what it has
+// remembered, and where its files are.
 
 import { useState } from 'preact/hooks';
 import { html, postJson, CommitInput, Icon } from './common.js';
 import { BudgetSources, CompetitionPanel } from './network.js';
+import { setThemeChoice, useTheme } from './theme.js';
 
 
 function save(changes, setError) {
@@ -74,6 +75,30 @@ function StartupSettings({ state }) {
                 <p class="small-note warn-text">Running on ${runningPort} now;
                     ${' '}${startup.port} from the next start.</p>`}
             ${error && html`<div class="error-banner">${error}</div>`}
+        </section>`;
+}
+
+const THEME_OPTIONS = [
+    { choice: 'system', label: 'Match the system', icon: 'sun-moon' },
+    { choice: 'light', label: 'Light', icon: 'sun' },
+    { choice: 'dark', label: 'Dark', icon: 'moon' },
+];
+
+function Appearance() {
+    const { choice } = useTheme();
+    return html`
+        <section class="panel">
+            <h2>Appearance</h2>
+            <p class="muted">Light is easier to read outside on a bright day.
+                Kept by this browser; the sun / moon button in the top bar
+                switches it too.</p>
+            <div class="segmented theme-choice">
+                ${THEME_OPTIONS.map((option) => html`
+                    <button class=${choice === option.choice ? 'active' : ''}
+                        onClick=${() => setThemeChoice(option.choice)}>
+                        <${Icon} name=${option.icon} size=${15} />
+                        ${option.label}</button>`)}
+            </div>
         </section>`;
 }
 
@@ -163,6 +188,7 @@ export function SettingsView({ state }) {
         </div>
         <div class="settings-grid">
             <${CompetitionPanel} state=${state} />
+            <${Appearance} />
             <${StartupSettings} state=${state} />
             <${BudgetSettings} state=${state} />
             <${Remembered} state=${state} />

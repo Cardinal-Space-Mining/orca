@@ -30,8 +30,8 @@ const KIND_LABELS = {
 };
 
 function postReconnect(machineId) {
-    fetch(`/api/machines/${encodeURIComponent(machineId)}/reconnect`,
-        { method: 'POST' });
+    postJson(`/api/machines/${encodeURIComponent(machineId)}/reconnect`)
+        .catch(() => {});  // the card shows the link's state anyway
 }
 
 

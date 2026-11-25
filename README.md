@@ -14,12 +14,10 @@ machine through SSH, so nothing on the robot listens on the network.
 Options: `--port 8740`, `--no-browser`, `--bind 127.0.0.1`,
 `--workspace <path>` (default: the workspace containing the orchestrator).
 
-The logo is the orca from [Twemoji](https://github.com/jdecked/twemoji)
-(CC BY 4.0), recoloured.
-
-**Requirements:** Python 3.9+ (no packages to install) and SSH key access to
-each machine (`ssh-copy-id user@host`). Each managed machine needs `python3`
-3.9+; macOS's built-in one is fine. One-time setup per machine (host keys,
+**Requirements:** Python 3.10+ on the laptop (no packages to install;
+launch-utils, which Orca uses to read the launch config, needs 3.10) and SSH
+key access to each machine (`ssh-copy-id user@host`). Each managed machine
+needs `python3` 3.9+; macOS's built-in one is fine. One-time setup per machine (host keys,
 CAN permissions): [docs/machine-setup.md](docs/machine-setup.md).
 
 | Page | What it does |
@@ -247,6 +245,11 @@ the command line doesn't say), what the orchestrator has remembered (sharing
 choices and learned addresses, each can be forgotten) and where all its files
 are. Settings are in `~/.config/orca/settings.json`.
 
+**Light and dark.** The sun / moon button in the top bar switches between a
+dark theme and a high-contrast light one for reading outside on a bright day;
+Settings → Appearance can also make it follow the system. The choice is kept
+by the browser (each laptop picks its own), not in the settings file.
+
 ## Deploying
 
 The Deploy page replaces `sync.sh push --ws` (and the build you'd run after
@@ -403,7 +406,10 @@ machine routes their traffic out through whatever connection it has.
   Logs: `~/.orca/agent.log`.
 - **The orchestrator** (`backend/`): one link per machine (tries routes, installs or
   updates the agent, polls status, reconnects), plus a small HTTP server that
-  streams state to the browser with Server-Sent Events.
+  streams state to the browser with Server-Sent Events. It has no login, so it
+  only answers its own page: requests from other web pages open in the same
+  browser (another origin, a non-JSON POST, or, when bound to localhost, a
+  Host that isn't a loopback name) are refused.
 - **Config** (`backend/lance_config.py`): reads `lance/config` with
   launch-utils' own preprocessing code from your workspace, so previews match
   what `run.sh` does. `backend/config_edit.py` edits presets in place.
@@ -421,6 +427,12 @@ Standard library only. They cover scenario templates, the inventory, launch
 config overlays and preset editing (against your workspace's real config),
 rsync summaries, the bandwidth budget, the address book, and a real agent
 daemon started in a temporary directory.
+
+GitHub Actions (`.github/workflows/tests.yaml`) runs them on every push and
+pull request to `main`: everything with the system `python3` of Ubuntu 22.04,
+24.04 and 26.04, inside a checkout of lance-2026 so the config tests run
+against its `main`; the agent's tests on Python 3.9 (the oldest a machine may
+have, macOS's built-in one); and a syntax check of every web module.
 
 ## Coming from the "orchestrator" names
 

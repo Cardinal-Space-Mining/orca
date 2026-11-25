@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import json
 import os
+import shlex
 import socket
 from typing import Optional
 
@@ -315,13 +316,14 @@ class Orca:
             source = file.read()
         script = await link.call('file.write', {
             'path': '~/.orca/ros_monitor.py', 'content': source})
-        command = ('source /opt/ros/%s/setup.bash && source %s/install/'
-                   'setup.bash && ' % (distro, root))
+        command = 'source %s && source %s && ' % (
+            shlex.quote('/opt/ros/%s/setup.bash' % distro),
+            shlex.quote(root + '/install/setup.bash'))
         if self.settings['budget']['monitor_local_dds']:
             command += ('export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp '
-                        'CYCLONEDDS_URI=file://%s/src/project/cyclonedds.xml'
-                        ' && ' % root)
-        command += 'exec python3 -u ' + script['path']
+                        'CYCLONEDDS_URI=%s && ' % shlex.quote(
+                            'file://%s/src/project/cyclonedds.xml' % root))
+        command += 'exec python3 -u ' + shlex.quote(script['path'])
         await link.call('process.start', {
             'process_id': MONITOR_PROCESS_ID, 'label': 'Bandwidth monitor',
             'argv': ['bash', '-c', command], 'cwd': root,

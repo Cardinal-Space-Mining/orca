@@ -335,7 +335,9 @@ function ChannelBars({ budget }) {
 
 // --- Budget: sources ---------------------------------------------------------
 
-function linkInterfaceOptions(machines) {
+// Interfaces to measure the robot's link on. The saved one stays listed
+// while its machine is offline, so the choice is still visible.
+function linkInterfaceOptions(machines, chosen) {
     const options = [];
     for (const entry of machines) {
         if (entry.connection.state !== 'online' || !entry.stats) continue;
@@ -348,6 +350,12 @@ function linkInterfaceOptions(machines) {
                 label: `${entry.machine.label} · ${iface.name}${
                     iface.kind === 'wifi' ? ' (Wi-Fi)' : ''}` });
         }
+    }
+    if (chosen && !options.some((option) => option.value === chosen)) {
+        const [machineId, ...name] = chosen.split('/');
+        const entry = machines.find((item) => item.machine.id === machineId);
+        options.push({ value: chosen, label: `${entry ? entry.machine.label
+            : machineId} · ${name.join('/')} (offline)` });
     }
     return options;
 }
@@ -363,6 +371,11 @@ export function BudgetSources({ state }) {
     const monitor = budget.monitor;
     const withWorkspace = state.machines.filter((entry) =>
         entry.machine.workspace && entry.connection.state === 'online');
+    // What the list shows is what Start uses, even when the remembered
+    // machine is offline.
+    const monitorChoice = withWorkspace.some((entry) =>
+        entry.machine.id === monitorMachine) ? monitorMachine
+        : withWorkspace.length ? withWorkspace[0].machine.id : null;
 
     const save = (changes) => postJson('/api/settings', { budget: changes })
         .catch((failure) => setError(failure.message));
@@ -370,7 +383,7 @@ export function BudgetSources({ state }) {
         setError(null);
         try {
             await postJson('/api/budget/monitor', monitor.state === 'stopped'
-                ? { machine_id: monitorMachine } : {});
+                ? { machine_id: monitorChoice } : {});
         } catch (failure) {
             setError(failure.message);
         }
@@ -389,7 +402,8 @@ export function BudgetSources({ state }) {
                             : null });
                     }}>
                     <option value="">not measured</option>
-                    ${linkInterfaceOptions(state.machines).map((option) =>
+                    ${linkInterfaceOptions(state.machines, chosen).map(
+                        (option) =>
                         html`<option value=${option.value}>${option.label}
                             </option>`)}
                 </select>
@@ -406,7 +420,7 @@ export function BudgetSources({ state }) {
             <label class="field">
                 <span>net_adapter monitor on</span>
                 <div class="button-row tight">
-                    <select class="input" value=${monitorMachine}
+                    <select class="input" value=${monitorChoice || ''}
                         disabled=${monitor.state !== 'stopped'}
                         onChange=${(event) => setMonitorMachine(
                             event.target.value)}>
@@ -414,7 +428,9 @@ export function BudgetSources({ state }) {
                             value=${entry.machine.id}>${entry.machine.label}
                             </option>`)}
                     </select>
-                    <button class="button" onClick=${toggleMonitor}>
+                    <button class="button" onClick=${toggleMonitor}
+                        disabled=${monitor.state === 'stopped'
+                            && !monitorChoice}>
                         ${monitor.state === 'stopped' ? 'Start' : 'Stop'}
                         </button>
                     <span class="pill ${monitor.state === 'receiving' ? 'good'

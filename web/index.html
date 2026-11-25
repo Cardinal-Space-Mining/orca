@@ -4,7 +4,20 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Orca</title>
-    <link rel="icon" href="/static/orca.svg" type="image/svg+xml">
+    <!-- The theme first, so the page never draws in the wrong one
+         (js/theme.js has the rest). -->
+    <script>
+        (function () {
+            var choice = localStorage.getItem('orca-theme');
+            if (choice !== 'light' && choice !== 'dark') {
+                choice = matchMedia('(prefers-color-scheme: light)').matches
+                    ? 'light' : 'dark';
+            }
+            document.documentElement.dataset.theme = choice;
+        })();
+    </script>
+    <link rel="icon" href="/static/orca-gear-logo-dark.svg"
+        type="image/svg+xml">
     <link rel="stylesheet" href="/static/vendor/xterm.css">
     <link rel="stylesheet" href="/static/style.css">
     <!-- xterm.js ships as a classic script: defines window.Terminal and

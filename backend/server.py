@@ -72,6 +72,11 @@ Small HTTP server for Orca's web interface (standard library only).
 Every response except the event stream closes its connection, which keeps the
 parser trivial. The server binds to localhost by default: Orca is
 meant to be used on the machine it runs on.
+
+Other web pages open in the same browser can reach localhost too, so API
+requests from another origin are refused (Origin must match Host), POSTs must
+be JSON (which a cross-site form can't send), and when bound to localhost the
+Host must be a loopback name (so a DNS-rebound name can't read answers).
 '''
 
 from __future__ import annotations
@@ -81,6 +86,8 @@ import json
 import mimetypes
 import os
 import re
+import sys
+import traceback
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -104,8 +111,11 @@ REQUEST_ERRORS = (PlanError, ConfigError, ScenarioError, AgentError,
                   InventoryError,
                   ConnectionError, asyncio.TimeoutError, ValueError, KeyError)
 
-STATUS_TEXT = {200: 'OK', 400: 'Bad Request', 404: 'Not Found',
-               405: 'Method Not Allowed', 500: 'Internal Server Error'}
+STATUS_TEXT = {200: 'OK', 400: 'Bad Request', 403: 'Forbidden',
+               404: 'Not Found', 405: 'Method Not Allowed',
+               500: 'Internal Server Error'}
+
+LOOPBACK_NAMES = ('localhost', '127.0.0.1', '::1')
 
 mimetypes.add_type('text/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
@@ -179,6 +189,25 @@ def writeError(writer, status: int, message: str):
     writeJson(writer, status, {'error': message})
 
 
+def hostName(host: str) -> str:
+    '''"localhost:8740" -> "localhost", "[::1]:8740" -> "::1".'''
+    return (urlsplit('//' + host).hostname or '').lower()
+
+
+def foreignRequest(request: Request, loopback_only: bool) -> Optional[str]:
+    '''Why a request looks like it comes from another web page, or None.'''
+    host = request.headers.get('host', '')
+    if loopback_only and hostName(host) not in LOOPBACK_NAMES:
+        return 'unexpected Host %r' % host
+    origin = request.headers.get('origin')
+    if origin is not None and urlsplit(origin).netloc != host:
+        return 'requests from %s are not allowed' % origin
+    if request.method == 'POST' and not request.headers.get(
+            'content-type', '').startswith('application/json'):
+        return 'POST bodies must be application/json'
+    return None
+
+
 
 # --- Server -------------------------------------------------------------------
 
@@ -188,10 +217,12 @@ class HttpServer:
 
     def __init__(self, orca: Orca):
         self.orca = orca
+        self.loopback_only = True
 
     async def start(self, host: str, port: int):
         '''"localhost" listens on both loopback addresses: browsers often try
         ::1 first and log a refused connection when only 127.0.0.1 answers.'''
+        self.loopback_only = host in LOOPBACK_NAMES
         if host != 'localhost':
             return await asyncio.start_server(self.handle, host, port)
         try:
@@ -225,6 +256,10 @@ class HttpServer:
             writeError(writer, 404, 'not found')
 
     async def routeApi(self, request: Request, writer):
+        refusal = foreignRequest(request, self.loopback_only)
+        if refusal:
+            writeError(writer, 403, refusal)
+            return
         parts = request.path.strip('/').split('/')[1:]  # drop "api"
         if request.method == 'GET' and parts == ['events']:
             await self.streamEvents(writer)
@@ -239,6 +274,12 @@ class HttpServer:
             if isinstance(error, KeyError):
                 message = 'missing ' + message
             writeError(writer, 400, message)
+            return
+        except Exception as error:  # a bug: say so instead of hanging up
+            print('[ORCA]: %s %s failed:' % (request.method, request.path),
+                  file=sys.stderr)
+            traceback.print_exc()
+            writeError(writer, 500, '%s: %s' % (type(error).__name__, error))
             return
         if result is None:
             writeError(writer, 404, 'not found')
@@ -559,7 +600,9 @@ class HttpServer:
         try:
             self.writeEvent(writer, 'snapshot', self.orca.snapshot())
             await writer.drain()
-            while True:
+            # publish() drops a queue that fell too far behind; closing the
+            # stream then makes the browser reconnect and take a snapshot.
+            while queue in self.orca.subscribers:
                 try:
                     event, data = await asyncio.wait_for(
                         queue.get(), KEEPALIVE_PERIOD_S)

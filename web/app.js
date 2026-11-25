@@ -17,6 +17,7 @@ import { AddMachineView } from './js/addmachine.js';
 import { TerminalDock } from './js/terminals.js';
 import { NetworkPage, preferredView } from './js/networkpage.js';
 import { SettingsView } from './js/settings.js';
+import { logoFor, toggleTheme, useTheme } from './js/theme.js';
 
 
 const TABS = [
@@ -78,13 +79,25 @@ function CompetitionSwitch({ state }) {
         </button>`;
 }
 
+// Light for a bright day outside, dark for the pit.
+function ThemeButton() {
+    const { theme } = useTheme();
+    const next = theme === 'dark' ? 'light' : 'dark';
+    return html`
+        <button class="theme-button" title="Switch to the ${next} theme"
+            aria-label="Switch to the ${next} theme" onClick=${toggleTheme}>
+            <${Icon} name=${theme === 'dark' ? 'sun' : 'moon'} size=${16} />
+        </button>`;
+}
+
 function TopBar({ state, isLive, tab, navigate }) {
+    const { theme } = useTheme();
     const local = state && state.machines.find((entry) => entry.machine.is_local);
     const workspace = local && local.workspace;
     const numActiveRuns = state ? state.runs.filter(isRunActive).length : 0;
     return html`
         <header class="topbar">
-            <div class="brand"><img src="/static/orca.svg" alt="" />
+            <div class="brand"><img src=${logoFor(theme)} alt="" />
                 Orca</div>
             <nav class="tabs">
                 ${TABS.map((entry) => html`
@@ -107,6 +120,7 @@ function TopBar({ state, isLive, tab, navigate }) {
                         workspace.head)}</span>
                 </div>`}
             ${state && html`<${CompetitionSwitch} state=${state} />`}
+            <${ThemeButton} />
             <div class="live">
                 <span class="dot ${isLive ? 'good' : 'bad pulse'}"></span>
                 ${isLive ? 'Live' : 'Orca disconnected'}

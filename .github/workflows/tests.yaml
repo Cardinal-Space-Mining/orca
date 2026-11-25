@@ -1,0 +1,79 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # The unit tests, with each Ubuntu's own python3 (no pip packages: Orca
+  # and its agent use only the standard library). Orca is checked out inside
+  # a lance-2026 workspace so the tests against the real lance config run too.
+  unit-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ["22.04", "24.04", "26.04"]
+    steps:
+      - name: Checkout lance-2026
+        uses: actions/checkout@v6
+        with:
+          repository: Cardinal-Space-Mining/lance-2026
+          path: workspace/src
+
+      - name: Checkout launch-utils
+        run: git -C workspace/src submodule update --init --depth 1 launch-utils
+
+      - name: Checkout Orca
+        uses: actions/checkout@v6
+        with:
+          path: workspace/src/orchestrator
+
+      - name: Run tests on Ubuntu ${{ matrix.ubuntu }}
+        run: |
+          docker run --rm \
+            -v "$PWD/workspace:/workspace" \
+            -w /workspace/src/orchestrator \
+            ubuntu:${{ matrix.ubuntu }} \
+            /bin/bash -c "apt-get update -qq && \
+              apt-get install -y -qq python3 iproute2 > /dev/null && \
+              python3 --version && \
+              python3 -m unittest discover -s tests -t . -v"
+
+  # The agent and the sharing helper run on each machine with its own
+  # python3, as old as 3.9 (macOS's built-in one).
+  agent-python-3-9:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Orca
+        uses: actions/checkout@v6
+
+      - name: Run agent tests on Python 3.9
+        run: |
+          docker run --rm \
+            -v "$PWD:/orca" \
+            -w /orca \
+            python:3.9-slim \
+            /bin/bash -c "apt-get update -qq && \
+              apt-get install -y -qq iproute2 > /dev/null && \
+              python3 -m py_compile agent/*.py && \
+              python3 -m unittest -v tests.test_agent tests.test_sharing"
+
+  # The web page has no build step, so check every module parses.
+  web-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Orca
+        uses: actions/checkout@v6
+
+      - name: Check JavaScript syntax
+        run: |
+          status=0
+          for file in web/*.js web/js/*.js; do
+            node --input-type=module --check < "$file" || {
+              echo "::error file=$file::syntax error"; status=1; }
+          done
+          exit $status

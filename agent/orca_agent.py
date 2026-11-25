@@ -103,8 +103,12 @@ COMMAND_TIMEOUT_S = 5.0
 
 
 def fileHash(path):
-    with open(path, 'rb') as file:
-        return hashlib.sha256(file.read()).hexdigest()[:12]
+    '''Short sha256 of a file, or None if it can't be read.'''
+    try:
+        with open(path, 'rb') as file:
+            return hashlib.sha256(file.read()).hexdigest()[:12]
+    except OSError:
+        return None
 
 
 # Hash of the code this process is running; the file on disk may be newer.
@@ -972,14 +976,6 @@ SHARE_COMMAND_TIMEOUT_S = 40.0
 share_sudo_check = {'checked_s': 0.0, 'allowed': False, 'hash': None}
 
 
-def fileHash(path):
-    try:
-        with open(path, 'rb') as file:
-            return hashlib.sha256(file.read()).hexdigest()[:12]
-    except OSError:
-        return None
-
-
 def shareSudoAllowed(helper_hash):
     """True if sudo runs the helper without a password (checked once a
     minute, and again when the helper changes)."""
@@ -1325,6 +1321,14 @@ def logRoots(workspace):
     return [os.path.realpath(root) for root in roots]
 
 
+def modifiedTime(path):
+    '''mtime, or 0 for a file that just went away (ROS rotates logs).'''
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return 0.0
+
+
 def listLogs(workspace):
     '''Logs worth looking at on this machine, newest first per group.'''
     entries = []
@@ -1339,7 +1343,7 @@ def listLogs(workspace):
         entries.extend(buildLogs(workspace))
     ros_logs = glob.glob(os.path.join(ROS_LOG_DIRECTORY, '*.log')) + glob.glob(
         os.path.join(ROS_LOG_DIRECTORY, '*', 'launch.log'))
-    ros_logs.sort(key=lambda path: os.stat(path).st_mtime, reverse=True)
+    ros_logs.sort(key=modifiedTime, reverse=True)
     for path in ros_logs[:NUM_RECENT_ROS_LOGS]:
         label = os.path.relpath(path, ROS_LOG_DIRECTORY)
         entries.append(logEntry(path, 'ROS', label))

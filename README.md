@@ -210,6 +210,38 @@ mistake) and previews the launch it makes, with the exact commands, beside
 it. *Save* writes `src/project/orchestrator/scenarios/<id>.json`; commit it to
 share it. *Delete* removes the file.
 
+## The launch config
+
+The Config page browses `lance/config`: every action and preset, what a
+preset inherits and enables, and what a set of `key:=value` arguments
+resolves to (the same preprocessing `run.sh` does). It also edits it:
+
+- **Edit**, **Derive** (a new preset that inherits from the selected one) and
+  **New preset**: the preset's JSON, checked against the rest of the config
+  as you type (launch-utils must resolve it; selecting an action that doesn't
+  exist is flagged, since launch-utils silently skips it). *Save* writes it
+  into the file that defines it, changing only that preset's text, so the
+  diff shows just your change. New presets go in the file with the action's
+  `pragma:default`.
+- **Delete** refuses while something still names the preset: a preset
+  derived from it, a setup that selects it, the action's default, or a
+  scenario.
+- **Descriptions** of actions and presets (the pencil next to them) are kept
+  in `src/project/orchestrator/presets.json`, not in the presets: launch-utils
+  passes every key of a preset to its node as a ROS parameter (FINDINGS.md
+  L3). They show in the preset list's tooltips and are searched.
+
+Edits change this laptop's workspace: Deploy sends them to the other
+machines, and committing `src/lance` shares them.
+
+## Settings
+
+The gear at the end of the tabs: competition mode, the bandwidth budget's
+numbers and sources, the port and whether a browser opens at start (used when
+the command line doesn't say), what the orchestrator has remembered (sharing
+choices and learned addresses, each can be forgotten) and where all its files
+are. Settings are in `~/.config/orchestrator/settings.json`.
+
 ## Deploying
 
 The Deploy page replaces `sync.sh push --ws` (and the build you'd run after
@@ -369,7 +401,7 @@ machine routes their traffic out through whatever connection it has.
   streams state to the browser with Server-Sent Events.
 - **Config** (`backend/lance_config.py`): reads `lance/config` with
   launch-utils' own preprocessing code from your workspace, so previews match
-  what `run.sh` does.
+  what `run.sh` does. `backend/config_edit.py` edits presets in place.
 - **Web app** (`web/`): Preact + htm loaded as plain ES modules from
   `web/vendor/` (no build step, no internet needed). One module per page in
   `web/js/`; edit and reload.
@@ -381,9 +413,9 @@ cd src/orchestrator && python3 -m unittest discover -s tests -t .
 ```
 
 Standard library only. They cover scenario templates, the inventory, launch
-config overlays (against your workspace's real config), rsync summaries, the
-bandwidth budget, the address book, and a real agent daemon started in a
-temporary directory.
+config overlays and preset editing (against your workspace's real config),
+rsync summaries, the bandwidth budget, the address book, and a real agent
+daemon started in a temporary directory.
 
 ## Status
 
@@ -398,7 +430,7 @@ temporary directory.
 | 6 | Internet sharing over Ethernet (replaces netshare), with devices on the port matched to machines | done |
 | 7 | Add-machine wizard: discovery, host key and SSH key setup, entry from what the machine reports | done |
 | 8 | Setup checklist per machine: checked without sudo, fixed by scripts run in a terminal there | done |
-| 9 | Configurability: **scenario editor done** (new, duplicate, edit, delete; checked as you type, launch previewed); still to do: editing launch-config presets (with descriptions) and an orchestrator settings page | in progress |
+| 9 | Configurability: scenario editor (new, duplicate, edit, delete; checked as you type, launch previewed); launch-config preset editing with descriptions; Settings page | done |
 | 10 | Native macOS processes | |
 | 8b | Network map: the Machines and Network pages merged; networks, ports with live traffic, devices and discovery on one diagram; icons throughout | done |
 

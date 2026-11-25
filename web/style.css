@@ -798,8 +798,10 @@ pre.code {
 }
 .config-group:first-child { margin-top: 0; }
 .config-action { margin-bottom: 8px; }
-.config-action-name { font-size: 12.5px; color: var(--text);
-    padding: 3px 0; }
+.config-action-name { display: block; width: 100%; text-align: left;
+    border: 0; background: none; cursor: pointer; font-size: 12.5px;
+    color: var(--text); padding: 3px 0; }
+.config-action-name:hover, .config-action-name.active { color: var(--accent); }
 .config-action-name .faint { margin-left: 6px; font-size: 11px; }
 .config-preset {
     display: block;
@@ -1572,3 +1574,31 @@ tr.clickable:hover td { background: var(--surface-hover); }
 .page-head > .button { align-self: flex-start; display: inline-flex;
     align-items: center; gap: 6px; }
 .button-row .button { display: inline-flex; align-items: center; gap: 5px; }
+
+/* Preset editing (Config page). */
+.panel-title-row { display: flex; align-items: center; gap: 12px;
+    justify-content: space-between; flex-wrap: wrap; }
+.panel-title-row h2 { margin: 0; }
+.action-header .faint { font-size: 12.5px; font-weight: 500; }
+.description-line { display: flex; align-items: baseline; gap: 8px;
+    margin: 10px 0 4px; }
+.description-line .link-button { opacity: 0.6; }
+.description-line .link-button:hover { opacity: 1; }
+.description-edit { display: flex; flex-direction: column; gap: 8px;
+    margin: 10px 0 4px; }
+.description-edit textarea { width: 100%; resize: vertical; font: inherit; }
+.check-line.warn { color: var(--warn); margin-top: -4px; }
+.preset-text { min-height: 300px; tab-size: 4; }
+.editor-actions { margin: 12px 0 4px; }
+
+/* Settings page. */
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit,
+    minmax(min(100%, 520px), 1fr)); gap: 18px; align-items: start; }
+.input-with-unit { display: flex; align-items: center; gap: 8px; }
+.input-with-unit .input { width: 120px; }
+.settings-check { align-self: end; padding-bottom: 8px; }
+.settings-sources { margin-top: 14px; }
+.warn-text { color: var(--warn); }
+.table td.actions { text-align: right; white-space: nowrap; }
+.tag.warn { color: var(--warn); background: var(--warn-soft); }
+.settings-grid > .panel { margin: 0; }

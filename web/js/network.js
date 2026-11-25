@@ -352,7 +352,7 @@ function linkInterfaceOptions(machines) {
     return options;
 }
 
-function BudgetSources({ state }) {
+export function BudgetSources({ state }) {
     const budget = state.budget;
     const settings = budget.settings;
     const [monitorMachine, setMonitorMachine] = useState(

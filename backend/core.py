@@ -15,15 +15,18 @@ from typing import Optional
 from .addresses import Finder
 from .inventory import (Route, inventoryScopes, loadInventory,
                         readInventoryRaw, writeInventory)
-from .lance_config import ConfigError, LanceConfig
+from .config_edit import DESCRIPTIONS_RELATIVE_PATH
+from .lance_config import CONFIG_RELATIVE_PATH, ConfigError, LanceConfig
 from .budget import MONITOR_PROCESS_ID, BudgetTracker
 from .deploy import Deployer
 from .discovery import Discovery
 from .link import MachineLink
 from .network_map import DeviceBook, buildNetworkModel
 from .runs import PlanError, Planner, Run, expandHome, newRunId
-from .settings import loadSettings, mergeDefaults, saveSettings
-from .scenarios import loadScenarios, parseScenarioText
+from .settings import (SETTINGS_PATH, loadSettings, mergeDefaults,
+                       saveSettings, validateChanges)
+from .scenarios import (SCENARIO_DIRECTORY, loadScenarios,
+                        parseScenarioText)
 from .setup import Setup
 from .sharing import Sharing
 from .vm import VmController
@@ -180,6 +183,7 @@ class Orchestrator:
                     {'path': path, 'exists': os.path.isfile(path)}
                     for path in self.inventory_paths],
                 'agent_hash': self.agent_hash,
+                'files': self.files(),
             },
             'machines': [link.snapshot() for link in self.links],
             'runs': [run.snapshot() for run in self.runs.values()],
@@ -242,6 +246,7 @@ class Orchestrator:
     # --- Settings ---
 
     async def updateSettings(self, changes: dict) -> dict:
+        validateChanges(changes)
         was_competition = self.settings['competition_mode']
         self.settings = mergeDefaults(changes, self.settings)
         saveSettings(self.settings)
@@ -251,6 +256,43 @@ class Orchestrator:
                                    for link in self.links))
         self.budget.publish()
         return self.settings
+
+    def forget(self, what: str, machine_id: str) -> dict:
+        """Forget a machine's remembered sharing choices or learned
+        addresses (the Settings page)."""
+        if what == 'sharing':
+            self.settings['sharing'].pop(machine_id, None)
+            saveSettings(self.settings)
+            self.publish('settings', self.settings)
+        elif what == 'addresses':
+            self.finder.book.forget(machine_id)
+            self.finder.book.saveSoon(asyncio.get_running_loop())
+            link = self.links_by_id.get(machine_id)
+            if link:
+                link.publish()
+        else:
+            raise PlanError('nothing called "%s" to forget' % what)
+        return {'ok': True}
+
+    def files(self) -> list:
+        """The files the orchestrator reads and writes, for the Settings
+        page."""
+        workspace = self.workspace_root
+        entries = [
+            ('Settings (this page)', SETTINGS_PATH),
+            ('Learned machine addresses', self.finder.book.path),
+        ] + [('Machine inventory (%s)' % scope, path) for scope, path
+             in sorted(inventoryScopes(workspace).items())]
+        if workspace:
+            entries += [
+                ('Scenarios', os.path.join(workspace, SCENARIO_DIRECTORY)),
+                ('Preset descriptions', os.path.join(
+                    workspace, DESCRIPTIONS_RELATIVE_PATH)),
+                ('Launch config', os.path.join(workspace,
+                                               CONFIG_RELATIVE_PATH)),
+            ]
+        return [{'label': label, 'path': path,
+                 'exists': os.path.exists(path)} for label, path in entries]
 
     # --- net_adapter monitor (for the bandwidth budget) ---
 

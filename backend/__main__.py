@@ -17,9 +17,7 @@ import webbrowser
 from .core import ORCHESTRATOR_ROOT, Orchestrator
 from .inventory import InventoryError, inventoryPaths, loadInventory
 from .server import HttpServer
-
-
-DEFAULT_PORT = 8740
+from .settings import loadSettings
 
 
 def openBrowser(url: str):
@@ -47,7 +45,9 @@ def detectWorkspace():
 def parseArguments():
     parser = argparse.ArgumentParser(
         prog='orchestrator', description='CSM robot management orchestrator')
-    parser.add_argument('--port', type=int, default=DEFAULT_PORT)
+    parser.add_argument(
+        '--port', type=int, default=None,
+        help='web interface port (default: the Settings page\'s, 8740)')
     parser.add_argument(
         '--bind', default='localhost',
         help='address to serve the web interface on (default: localhost only)')
@@ -61,6 +61,9 @@ def parseArguments():
 
 
 async def serve(arguments, workspace_root):
+    startup = loadSettings()['startup']
+    if arguments.port is None:
+        arguments.port = startup['port']
     paths = inventoryPaths(workspace_root)
     orchestrator = Orchestrator(loadInventory(workspace_root), workspace_root,
                                 paths)
@@ -75,7 +78,7 @@ async def serve(arguments, workspace_root):
     for path in paths:
         state = 'found' if os.path.isfile(path) else 'not found'
         print('[ORCHESTRATOR]: inventory %s (%s)' % (path, state), flush=True)
-    if not arguments.no_browser:
+    if not arguments.no_browser and startup['open_browser']:
         openBrowser(url)
     async with server:
         await orchestrator.run()

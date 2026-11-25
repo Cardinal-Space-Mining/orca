@@ -16,6 +16,7 @@ import { InventoryView } from './js/inventory.js';
 import { AddMachineView } from './js/addmachine.js';
 import { TerminalDock } from './js/terminals.js';
 import { NetworkPage, preferredView } from './js/networkpage.js';
+import { SettingsView } from './js/settings.js';
 
 
 const TABS = [
@@ -26,6 +27,7 @@ const TABS = [
     { id: 'bags', label: 'Bags', icon: 'archive' },
     { id: 'logs', label: 'Logs', icon: 'scroll-text' },
     { id: 'config', label: 'Config', icon: 'sliders-horizontal' },
+    { id: 'settings', label: 'Settings', icon: 'settings', iconOnly: true },
 ];
 
 // The open tab lives in the URL (#/runs/<run id>, #/machines/map/<what is
@@ -88,8 +90,10 @@ function TopBar({ state, isLive, tab, navigate }) {
                 ${TABS.map((entry) => html`
                     <button class="tab ${tab === entry.id ? 'active' : ''}"
                         disabled=${entry.soon}
+                        title=${entry.iconOnly ? entry.label : ''}
                         onClick=${() => navigate(entry.id)}><${Icon}
-                        name=${entry.icon} size=${15} />${entry.label}
+                        name=${entry.icon} size=${15} />${entry.iconOnly ? ''
+                            : entry.label}
                         ${entry.id === 'runs' && numActiveRuns > 0 && html`
                             <span class="badge">${numActiveRuns}</span>`}
                         ${entry.soon && html`<span class="soon">soon</span>`}
@@ -139,6 +143,8 @@ function Page({ state, location, navigate, now }) {
                 onSelect=${(machineId) => navigate('logs', machineId)} />`;
         case 'config':
             return html`<${ConfigView} />`;
+        case 'settings':
+            return html`<${SettingsView} state=${state} />`;
         default:
             if (location.detail === 'edit') return html`<${InventoryView} />`;
             if (location.detail === 'add') {

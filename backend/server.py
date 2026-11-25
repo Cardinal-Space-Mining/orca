@@ -48,7 +48,9 @@ Small HTTP server for the orchestrator's web interface (standard library only).
     POST /api/discovery/add                 {"scope", "entry"}
     POST /api/machines/<id>/terminals/<t>/input|resize|close
     GET  /api/settings, POST /api/settings  orchestrator settings (competition
-                                            mode, budget sources)
+                                            mode, budget, startup)
+    POST /api/settings/forget               {"what": "sharing"|"addresses",
+                                            "machine_id"}
     GET  /api/budget                        bandwidth budget with history
     POST /api/budget/reset                  start a new averaging window
     POST /api/budget/monitor                {"machine_id"} start / {} stop the
@@ -59,6 +61,13 @@ Small HTTP server for the orchestrator's web interface (standard library only).
     GET  /api/config                        launch config actions and presets
     GET  /api/config/preset?action=&preset= one preset, resolved
     POST /api/config/resolve                {"arguments": {key: value}}
+    POST /api/config/check                  {"action", "preset", "value"}:
+                                            what's wrong, what it resolves to
+    POST /api/config/save                   the same + {"description"}: write
+                                            it into its lance config file
+    POST /api/config/delete                 {"action", "preset"}
+    POST /api/config/description            {"key", "text"} ("action" or
+                                            "action:=preset")
 
 Every response except the event stream closes its connection, which keeps the
 parser trivial. The server binds to localhost by default: the orchestrator is
@@ -71,11 +80,13 @@ import asyncio
 import json
 import mimetypes
 import os
+import re
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .core import ORCHESTRATOR_ROOT, Orchestrator
 from .inventory import InventoryError
+from .config_edit import ConfigEditor, configFiles, overrideProblems
 from .lance_config import ConfigError
 from .link import AgentError
 from .runs import PlanError
@@ -267,6 +278,9 @@ class HttpServer:
             return orchestrator.settings
         if method == 'POST' and parts == ['settings']:
             return await orchestrator.updateSettings(request.json())
+        if method == 'POST' and parts == ['settings', 'forget']:
+            body = request.json()
+            return orchestrator.forget(body['what'], body['machine_id'])
         if method == 'GET' and parts == ['budget']:
             return orchestrator.budget.snapshot(with_history=True)
         if method == 'POST' and parts == ['budget', 'reset']:
@@ -449,16 +463,77 @@ class HttpServer:
         if config is None:
             raise ConfigError(self.orchestrator.lance_config_error
                               or 'the orchestrator has no workspace')
+        editor = ConfigEditor(config, self.orchestrator.workspace_root)
         if request.method == 'GET' and parts == []:
-            return {'actions': config.actions(),
-                    'constants': config.addressConstants(),
-                    'path': config.config_path}
+            return self.configCatalog(config, editor)
         if request.method == 'GET' and parts == ['preset']:
             return config.resolvePreset(request.queryValue('action'),
                                         request.queryValue('preset'))
-        if request.method == 'POST' and parts == ['resolve']:
-            return config.resolve(request.json().get('arguments') or {})
+        if request.method != 'POST':
+            return None
+        body = request.json()
+        if parts == ['resolve']:
+            return config.resolve(body.get('arguments') or {})
+        if parts == ['check']:
+            return editor.check(body['action'], body['preset'], body['value'])
+        if parts == ['save']:
+            path = editor.edit(body['action'], body['preset'], body['value'])
+            if 'description' in body:
+                editor.setDescription('%s:=%s' % (body['action'],
+                                                  body['preset']),
+                                      body['description'])
+            return {'ok': True, 'path': editor.relative(path)}
+        if parts == ['delete']:
+            path = editor.delete(body['action'], body['preset'],
+                                 self.scenarioReferences(body['action'],
+                                                         body['preset']))
+            return {'ok': True, 'path': editor.relative(path)}
+        if parts == ['description']:
+            editor.setDescription(body['key'], body.get('text') or '')
+            return {'ok': True}
         return None
+
+    def configCatalog(self, config, editor: ConfigEditor) -> dict:
+        actions = config.actions()
+        merged = config.load()
+        descriptions = editor.descriptions()
+        sources = {}
+        for path, data in configFiles(config):
+            for action, block in data.items():
+                if isinstance(block, dict) and not action.startswith(
+                        'pragma:'):
+                    for preset in block:
+                        sources.setdefault((action, preset),
+                                           editor.relative(path))
+        for action in actions:
+            action['description'] = descriptions.get(action['name'])
+            action['source'] = editor.relative(editor.sourceOf(
+                action['name']))
+            for preset in action['presets']:
+                key = '%s:=%s' % (action['name'], preset['name'])
+                preset['description'] = descriptions.get(key)
+                preset['source'] = sources.get((action['name'],
+                                                preset['name']))
+                preset['problems'] = overrideProblems(merged, preset['raw'])
+        return {'actions': actions,
+                'constants': config.addressConstants(),
+                'path': config.config_path,
+                'descriptions_path': editor.relative(
+                    editor.descriptions_path)}
+
+    def scenarioReferences(self, action: str, preset: str) -> list:
+        """Scenarios that can select action:=preset ("{robot}_{arena}"
+        counts as matching any name)."""
+        def matches(value) -> bool:
+            pattern = re.sub(r'\\\{[^}]*\\\}', '.+', re.escape(str(value)))
+            return re.fullmatch(pattern, preset) is not None
+
+        scenarios, _ = self.orchestrator.scenarios()
+        return ['the scenario "%s" may use it' % scenario['id']
+                for scenario in scenarios
+                if any(matches(((process.get('lance') or {}).get('args')
+                                or {}).get(action, ''))
+                       for process in scenario.get('processes', []))]
 
     def serveFile(self, writer, relative_path: str):
         full_path = os.path.realpath(os.path.join(WEB_ROOT, relative_path))

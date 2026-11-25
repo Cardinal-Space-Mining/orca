@@ -6,6 +6,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { html, Icon, postJson, shortCommit } from './js/common.js';
 import { useOrchestratorState, useNow } from './js/state.js';
 import { LaunchView } from './js/launch.js';
+import { ScenarioEditor } from './js/scenarioedit.js';
 import { RunsView, isRunActive } from './js/runs.js';
 import { ConfigView } from './js/config.js';
 import { DeployView } from './js/deploy.js';
@@ -112,7 +113,13 @@ function TopBar({ state, isLive, tab, navigate }) {
 function Page({ state, location, navigate, now }) {
     switch (location.tab) {
         case 'launch':
-            return html`<${LaunchView} state=${state}
+            if (location.detail === 'edit') {
+                return html`<${ScenarioEditor} key=${location.rest || 'new'}
+                    state=${state} scenarioId=${location.rest} />`;
+            }
+            return html`<${LaunchView} key=${location.detail || ''}
+                state=${state} initialId=${location.detail
+                    && decodeURIComponent(location.detail)}
                 onLaunched=${(runId) => navigate('runs', runId)} />`;
         case 'runs':
             return html`<${RunsView} state=${state}

@@ -1554,3 +1554,21 @@ body.is-resizing .terminal-view { opacity: 0.85; }
 tr.clickable { cursor: pointer; }
 tr.clickable:hover td { background: var(--surface-hover); }
 .port-sparkline { display: flex; align-items: center; gap: 10px; margin: 4px 0 8px; }
+
+/* Scenario editor. */
+.scenario-editor { display: grid; grid-template-columns: minmax(420px, 1fr) minmax(420px, 1fr);
+    gap: 18px; align-items: start; }
+@media (max-width: 1100px) { .scenario-editor { grid-template-columns: 1fr; } }
+.editor-panel .fields { align-items: end; }
+.scenario-text { min-height: 520px; tab-size: 4; }
+.check-line { display: flex; align-items: center; gap: 6px; margin: 4px 0 10px;
+    font-size: 13px; color: var(--text-muted); }
+.check-line.good { color: var(--good); }
+.check-line.bad { color: var(--bad); }
+.format-help { margin-top: 12px; font-size: 13px; }
+.format-help summary { cursor: pointer; color: var(--text-muted); }
+.format-help dt { margin-top: 8px; font-weight: 600; }
+.format-help dd { margin: 2px 0 0; color: var(--text-muted); }
+.page-head > .button { align-self: flex-start; display: inline-flex;
+    align-items: center; gap: 6px; }
+.button-row .button { display: inline-flex; align-items: center; gap: 5px; }

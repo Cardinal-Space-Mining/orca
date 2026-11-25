@@ -12,6 +12,10 @@ Small HTTP server for the orchestrator's web interface (standard library only).
     GET  /api/machines/<id>/processes/<process>/output?from=N
     POST /api/machines/<id>/processes/<process>/stop
     GET  /api/scenarios                     scenarios and file errors
+    GET  /api/scenarios/<id>/source         a scenario file's text
+    POST /api/scenarios/<id>                {"text"}: check and save it
+    POST /api/scenarios/<id>/check          {"text"}: check without saving
+    POST /api/scenarios/<id>/delete
     POST /api/plan                          plan a launch (nothing starts)
     POST /api/runs                          launch
     POST /api/runs/<id>/stop
@@ -75,7 +79,8 @@ from .inventory import InventoryError
 from .lance_config import ConfigError
 from .link import AgentError
 from .runs import PlanError
-from .scenarios import ScenarioError
+from .scenarios import (ScenarioError, deleteScenario, parseScenarioText,
+                        readScenarioSource, writeScenario)
 
 
 WEB_ROOT = os.path.join(ORCHESTRATOR_ROOT, 'web')
@@ -241,6 +246,8 @@ class HttpServer:
         if method == 'GET' and parts == ['scenarios']:
             scenarios, errors = orchestrator.scenarios()
             return {'scenarios': scenarios, 'errors': errors}
+        if parts[:1] == ['scenarios'] and len(parts) in (2, 3):
+            return self.answerScenario(request, parts[1], parts[2:])
         if method == 'POST' and parts == ['plan']:
             return orchestrator.plan(request.json())
         if method == 'POST' and parts == ['runs']:
@@ -361,6 +368,24 @@ class HttpServer:
                 timeout_s=120.0)
             self.orchestrator.noteScan(machine_id, result)
             return result
+        return None
+
+    def answerScenario(self, request: Request, scenario_id: str,
+                       action: list):
+        workspace = self.orchestrator.workspace_root
+        if request.method == 'GET' and action == ['source']:
+            return readScenarioSource(workspace, scenario_id)
+        if request.method != 'POST':
+            return None
+        if action == ['check']:
+            scenario = parseScenarioText(scenario_id,
+                                         request.json().get('text', ''))
+            return {'ok': True, 'scenario': scenario}
+        if action == ['delete']:
+            return {'path': deleteScenario(workspace, scenario_id)}
+        if action == []:
+            return {'path': writeScenario(workspace, scenario_id,
+                                          request.json().get('text', ''))}
         return None
 
     async def answerDiscovery(self, request: Request, action: str):

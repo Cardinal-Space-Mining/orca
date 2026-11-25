@@ -174,3 +174,63 @@ def loadScenarios(workspace_root) -> tuple:
     scenarios.sort(key=lambda scenario: (scenario.get('order', 100),
                                          scenario.get('label', '')))
     return scenarios, errors
+
+
+
+# --- Editing (the launch page's scenario editor) ----------------------------
+
+SCENARIO_ID = re.compile(r'^[a-z0-9][a-z0-9-]{0,40}$')
+
+
+def scenarioPath(workspace_root, scenario_id: str) -> str:
+    if not workspace_root:
+        raise ScenarioError('the orchestrator has no workspace')
+    if not SCENARIO_ID.match(scenario_id or ''):
+        raise ScenarioError('a scenario id is lowercase letters, digits and '
+                            'dashes')
+    return os.path.join(workspace_root, SCENARIO_DIRECTORY,
+                        scenario_id + '.json')
+
+
+def readScenarioSource(workspace_root, scenario_id: str) -> dict:
+    path = scenarioPath(workspace_root, scenario_id)
+    try:
+        with open(path) as file:
+            text = file.read()
+    except FileNotFoundError:
+        return {'id': scenario_id, 'path': path, 'exists': False, 'text': ''}
+    return {'id': scenario_id, 'path': path, 'exists': True, 'text': text}
+
+
+def parseScenarioText(scenario_id: str, text: str) -> dict:
+    """The scenario a file's text describes, checked. Raises ScenarioError
+    (with the line for JSON mistakes)."""
+    try:
+        data = json.loads(text)
+    except ValueError as error:
+        raise ScenarioError('not valid JSON: %s' % error)
+    if not isinstance(data, dict):
+        raise ScenarioError('a scenario is a JSON object')
+    checkScenario(scenario_id, data)
+    data.setdefault('roles', {})
+    data.setdefault('options', {})
+    return dict(data, id=scenario_id)
+
+
+def writeScenario(workspace_root, scenario_id: str, text: str) -> str:
+    path = scenarioPath(workspace_root, scenario_id)
+    parseScenarioText(scenario_id, text)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temporary_path = path + '.tmp'
+    with open(temporary_path, 'w') as file:
+        file.write(text if text.endswith('\n') else text + '\n')
+    os.replace(temporary_path, path)
+    return path
+
+
+def deleteScenario(workspace_root, scenario_id: str) -> str:
+    path = scenarioPath(workspace_root, scenario_id)
+    if not os.path.isfile(path):
+        raise ScenarioError('no scenario ' + scenario_id)
+    os.remove(path)
+    return path

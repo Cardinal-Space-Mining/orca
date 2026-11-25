@@ -23,7 +23,7 @@ from .link import MachineLink
 from .network_map import DeviceBook, buildNetworkModel
 from .runs import PlanError, Planner, Run, expandHome, newRunId
 from .settings import loadSettings, mergeDefaults, saveSettings
-from .scenarios import loadScenarios
+from .scenarios import loadScenarios, parseScenarioText
 from .setup import Setup
 from .sharing import Sharing
 from .vm import VmController
@@ -361,11 +361,17 @@ class Orchestrator:
     # --- Runs ---
 
     def plan(self, request: dict) -> dict:
-        return self.planner.plan(self.scenario(request['scenario_id']),
-                                 request)
+        '''request["source"] plans an unsaved draft from the scenario
+        editor instead of the saved file.'''
+        if request.get('source') is not None:
+            scenario = parseScenarioText(request['scenario_id'],
+                                         request['source'])
+        else:
+            scenario = self.scenario(request['scenario_id'])
+        return self.planner.plan(scenario, request)
 
     def launch(self, request: dict) -> dict:
-        plan = self.plan(request)
+        plan = self.plan(dict(request, source=None))
         if plan['errors']:
             raise PlanError('; '.join(plan['errors']))
         run = Run(self, newRunId(), plan['label'], plan['scenario_id'], plan)

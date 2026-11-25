@@ -3,7 +3,7 @@
 // then launch.
 
 import { useEffect, useState } from 'preact/hooks';
-import { html, getJson, postJson, StatusDot, CommitInput }
+import { html, getJson, postJson, StatusDot, CommitInput, Icon }
     from './common.js';
 
 
@@ -162,7 +162,10 @@ function initialChoices(scenario) {
     return { assignment, options, addresses: {}, extra_arguments: {} };
 }
 
-function ScenarioForm({ scenario, machines, onLaunched }) {
+// `source`: the editor's unsaved text, planned instead of the saved file
+// (preview only: no launch button).
+export function ScenarioForm({ scenario, machines, onLaunched, source = null,
+    actions = null }) {
     const [choices, setChoices] = useState(() => initialChoices(scenario));
     const [plan, setPlan] = useState(null);
     const [error, setError] = useState(null);
@@ -178,7 +181,7 @@ function ScenarioForm({ scenario, machines, onLaunched }) {
         const timer = setTimeout(async () => {
             try {
                 const result = await postJson('/api/plan',
-                    { scenario_id: scenario.id, ...choices });
+                    { scenario_id: scenario.id, ...choices, source });
                 if (isCurrent) {
                     setPlan(result);
                     setError(null);
@@ -191,7 +194,7 @@ function ScenarioForm({ scenario, machines, onLaunched }) {
             isCurrent = false;
             clearTimeout(timer);
         };
-    }, [scenario.id, JSON.stringify(choices), onlineKey]);
+    }, [scenario.id, JSON.stringify(choices), onlineKey, source]);
 
     const update = (part, key, value) => setChoices((previous) => ({
         ...previous, [part]: { ...previous[part], [key]: value } }));
@@ -211,7 +214,10 @@ function ScenarioForm({ scenario, machines, onLaunched }) {
     const errors = [...(plan ? plan.errors : []), ...(error ? [error] : [])];
     return html`
         <section class="panel">
-            <h2>${scenario.label}</h2>
+            <div class="run-head">
+                <h2>${scenario.label}</h2>
+                ${actions}
+            </div>
             <p class="muted">${scenario.description}</p>
             <div class="fields">
                 ${Object.entries(scenario.roles).map(([role, definition]) =>
@@ -236,7 +242,7 @@ function ScenarioForm({ scenario, machines, onLaunched }) {
                 extra=${choices.extra_arguments[process.key] || ''}
                 setExtra=${(value) => update('extra_arguments', process.key,
                     value)} />`)}
-            <div class="button-row">
+            ${source === null && html`<div class="button-row">
                 <button class="button primary large"
                     disabled=${!plan || errors.length > 0 || isLaunching}
                     onClick=${launch}>
@@ -244,22 +250,25 @@ function ScenarioForm({ scenario, machines, onLaunched }) {
                 <span class="faint">${plan && plan.processes.length > 1
                     ? 'Processes start in order; if one fails, the others are '
                         + 'stopped again.' : ''}</span>
-            </div>
+            </div>`}
         </section>`;
 }
 
 
 // --- Page --------------------------------------------------------------------
 
-export function LaunchView({ state, onLaunched }) {
+export function LaunchView({ state, onLaunched, initialId = null }) {
     const [catalog, setCatalog] = useState(null);
-    const [selectedId, setSelectedId] = useState(null);
+    const [selectedId, setSelectedId] = useState(initialId);
     const [error, setError] = useState(null);
 
     useEffect(() => {
         getJson('/api/scenarios').then((result) => {
             setCatalog(result);
-            if (result.scenarios.length) setSelectedId(result.scenarios[0].id);
+            if (result.scenarios.length && !result.scenarios.some((entry) =>
+                entry.id === initialId)) {
+                setSelectedId(result.scenarios[0].id);
+            }
         }).catch((failure) => setError(failure.message));
     }, []);
 
@@ -269,12 +278,16 @@ export function LaunchView({ state, onLaunched }) {
     const scenario = catalog.scenarios.find((entry) =>
         entry.id === selectedId);
     return html`
-        <div class="page-head"><div>
-            <h1>Launch</h1>
-            <p>Scenarios from <span class="mono">
-                src/project/orchestrator/scenarios</span>: one launch can start
-                processes on several machines.</p>
-        </div></div>
+        <div class="page-head">
+            <div>
+                <h1>Launch</h1>
+                <p>Scenarios from <span class="mono">
+                    src/project/orchestrator/scenarios</span>: one launch can
+                    start processes on several machines.</p>
+            </div>
+            <a class="button" href="#/launch/edit"><${Icon} name="plus"
+                size=${15} />${' New scenario'}</a>
+        </div>
         ${catalog.errors.map((entry) => html`<div class="error-banner">
             <span class="mono">${entry.path}</span>: ${entry.error}</div>`)}
         <div class="split">
@@ -282,7 +295,15 @@ export function LaunchView({ state, onLaunched }) {
                 selectedId=${selectedId} onSelect=${setSelectedId} />
             ${scenario ? html`<${ScenarioForm} key=${scenario.id}
                 scenario=${scenario} machines=${state.machines}
-                onLaunched=${onLaunched} />`
+                onLaunched=${onLaunched}
+                actions=${html`<div class="button-row">
+                    <a class="button small" href=${`#/launch/edit/${
+                        scenario.id}`}><${Icon} name="pencil" size=${13} />
+                        ${' Edit'}</a>
+                    <a class="button small" href=${`#/launch/edit/${
+                        scenario.id}~copy`}><${Icon} name="layers"
+                        size=${13} />${' Duplicate'}</a>
+                </div>`} />`
                 : html`<div class="placeholder">No scenarios found.</div>`}
         </div>`;
 }

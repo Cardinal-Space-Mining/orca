@@ -203,6 +203,13 @@ the competition one, shortened:
   output is also saved on its machine under `~/.orchestrator/runs/<run>/` (20 MB
   cap per process, removed after 14 days).
 
+
+**Editing in the app:** Launch → *New scenario*, or *Edit* / *Duplicate* on
+a scenario. The editor checks the JSON as you type (with the line of a JSON
+mistake) and previews the launch it makes, with the exact commands, beside
+it. *Save* writes `src/project/orchestrator/scenarios/<id>.json`; commit it to
+share it. *Delete* removes the file.
+
 ## Deploying
 
 The Deploy page replaces `sync.sh push --ws` (and the build you'd run after
@@ -391,7 +398,7 @@ temporary directory.
 | 6 | Internet sharing over Ethernet (replaces netshare), with devices on the port matched to machines | done |
 | 7 | Add-machine wizard: discovery, host key and SSH key setup, entry from what the machine reports | done |
 | 8 | Setup checklist per machine: checked without sudo, fixed by scripts run in a terminal there | done |
-| 9 | Configurability: edit scenarios, launch-config presets (with descriptions) and orchestrator settings in the app | next |
+| 9 | Configurability: **scenario editor done** (new, duplicate, edit, delete; checked as you type, launch previewed); still to do: editing launch-config presets (with descriptions) and an orchestrator settings page | in progress |
 | 10 | Native macOS processes | |
 | 8b | Network map: the Machines and Network pages merged; networks, ports with live traffic, devices and discovery on one diagram; icons throughout | done |
 

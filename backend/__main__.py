@@ -1,7 +1,7 @@
 '''
 Start Orca (from the workspace root):
 
-    ./src/orchestrator/orca [--port 8740] [--no-browser]
+    ./src/orca/orca [--port 8740] [--no-browser]
 '''
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def openBrowser(url: str):
 
 
 def detectWorkspace():
-    '''Orca normally lives at <workspace>/src/orchestrator.'''
+    '''Orca normally lives at <workspace>/src/orca.'''
     source_directory = os.path.dirname(ORCA_ROOT)
     workspace_root = os.path.dirname(source_directory)
     if os.path.basename(source_directory) == 'src' \

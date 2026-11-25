@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-'''Launcher: ./src/orchestrator/orca  (see README.md)'''
+'''Launcher: ./src/orca/orca  (see README.md)'''
 import os
 import sys
 

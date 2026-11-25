@@ -8,7 +8,7 @@ A web app served by a small Python program on your laptop; it talks to each
 machine through SSH, so nothing on the robot listens on the network.
 
 ```bash
-./src/orchestrator/orca      # from the workspace root; opens a browser tab
+./src/orca/orca      # from the workspace root; opens a browser tab
 ```
 
 Options: `--port 8740`, `--no-browser`, `--bind 127.0.0.1`,
@@ -438,7 +438,7 @@ machine routes their traffic out through whatever connection it has.
 ## Tests
 
 ```bash
-cd src/orchestrator && python3 -m unittest discover -s tests -t .
+cd src/orca && python3 -m unittest discover -s tests -t .
 ```
 
 Standard library only. They cover scenario templates, the inventory, launch
@@ -457,11 +457,22 @@ have, macOS's built-in one); and a syntax check of every web module.
 Before it was called Orca, its files had "orchestrator" in their names. On
 first start Orca moves `~/.config/orchestrator` to `~/.config/orca`. On each
 machine the agent now lives in `~/.orca` (installed by itself on connect);
-`~/.orchestrator` can be deleted once nothing launched before the rename is
-still running there. Internet sharing needs its helper installed again (the
-machine's setup checklist offers it; the installer removes the old
-`orchestrator-share`). The team files moved from `src/project/orchestrator`
-to `src/project/orca`.
+the Logs page's Clean up panel deletes the old `~/.orchestrator` once nothing
+launched before the rename is still running there. Internet sharing needs its
+helper installed again (the machine's setup checklist offers it; the
+installer removes the old `orchestrator-share`). The team files moved from
+`src/project/orchestrator` to `src/project/orca`.
+
+The repository is now `Cardinal-Space-Mining/orca` (GitHub redirects the old
+URL), checked out at `src/orca` instead of `src/orchestrator`. In an existing
+workspace, after pulling the commit that renamed it:
+
+```bash
+cd src
+git submodule sync orca && git submodule update --init orca
+rm -rf orchestrator   # the old checkout git leaves behind (check it has no
+                      # uncommitted work first)
+```
 
 ## Status
 

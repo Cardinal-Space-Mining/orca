@@ -30,13 +30,13 @@ jobs:
       - name: Checkout Orca
         uses: actions/checkout@v6
         with:
-          path: workspace/src/orchestrator
+          path: workspace/src/orca
 
       - name: Run tests on Ubuntu ${{ matrix.ubuntu }}
         run: |
           docker run --rm \
             -v "$PWD/workspace:/workspace" \
-            -w /workspace/src/orchestrator \
+            -w /workspace/src/orca \
             ubuntu:${{ matrix.ubuntu }} \
             /bin/bash -c "apt-get update -qq && \
               apt-get install -y -qq python3 iproute2 > /dev/null && \

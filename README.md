@@ -27,7 +27,7 @@ CAN permissions): [docs/machine-setup.md](docs/machine-setup.md).
 | Runs | Everything launched, deployed or pulled, with live output per process (filter by text, level or node), stop all or one. |
 | Deploy | Push this workspace's `src/` to other machines and build there; compare first to see exactly what changes. |
 | Bags | Recordings on each machine with length, size and topics; pull them here, delete them there once pulled. |
-| Logs | Orchestrator run logs, each package's latest build log, ROS logs, the agent's and the VM autostart log, per machine. |
+| Logs | Orchestrator run logs, each package's latest build log, ROS logs, the agent's and the VM autostart log, per machine; delete logs, and clean up what piles up on each machine's disk. |
 | Config | Browse and edit every action and preset of `lance/config` (with descriptions), see what a preset inherits and enables, and try `key:=value` arguments without launching. |
 | Settings (gear) | Competition mode, the bandwidth budget, startup options, what the orchestrator remembers, and where its files are. |
 
@@ -249,6 +249,24 @@ are. Settings are in `~/.config/orca/settings.json`.
 dark theme and a high-contrast light one for reading outside on a bright day;
 Settings → Appearance can also make it follow the system. The choice is kept
 by the browser (each laptop picks its own), not in the settings file.
+
+## Cleaning up
+
+Robot disks are small (the VM's is 64 GB), so the Logs page has a **Clean up**
+panel per machine: how much each kind of leftover takes, and a button to
+delete it.
+
+| Kind | What | Kept |
+|---|---|---|
+| Launch overlays | `orca-*.json` in `install/lance/share/lance/config`, written when a launch changes config | Those of running launches. Each is deleted when its launch ends, so these are from crashes or older versions. |
+| Orca run logs | `~/.orca/runs/<run>/` | Runs still going. Deleted after 14 days anyway. |
+| ROS logs | `~/.ros/log` | Files written in the last 10 minutes. |
+| Old build logs | colcon's `log/build_*` | The newest 4 builds (the Logs page reads them). |
+| Old agent folder | `~/.orchestrator`, from before the rename | All of it if an old agent is still running. |
+
+Selecting a log shows it with a **Delete** button (run, build and ROS logs;
+not the agent's own log or the VM's, which are open). The agent checks again
+before deleting, so nothing a running process uses goes.
 
 ## Deploying
 

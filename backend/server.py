@@ -27,6 +27,9 @@ Small HTTP server for Orca's web interface (standard library only).
     POST /api/machines/<id>/bags/delete     {"name"}, only once pulled
     GET  /api/machines/<id>/logs            log files there
     GET  /api/machines/<id>/logs/read?path=&max_bytes=[&download=1]
+    POST /api/machines/<id>/logs/delete     {"path"}
+    GET  /api/machines/<id>/cleanup         what could be deleted there
+    POST /api/machines/<id>/cleanup         {"categories": [...]}: delete it
     POST /api/machines/<id>/vm/<action>     start, stop, restart, kill, commit,
                                             backup, restore (a run)
     POST /api/machines/<id>/terminals       {"kind": "shell"|"serial"|
@@ -392,6 +395,13 @@ class HttpServer:
                     machine_id, request.json()['name'])
         if method == 'GET' and parts == ['logs']:
             return {'logs': await orca.listLogs(machine_id)}
+        if method == 'POST' and parts == ['logs', 'delete']:
+            return await orca.deleteLog(machine_id, request.json()['path'])
+        if parts == ['cleanup']:
+            if method == 'GET':
+                return await orca.cleanupScan(machine_id)
+            return await orca.cleanup(machine_id,
+                                      request.json()['categories'])
         if method == 'GET' and parts == ['logs', 'read']:
             return await orca.readLog(
                 machine_id, request.queryValue('path'),

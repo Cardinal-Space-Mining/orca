@@ -1374,6 +1374,207 @@ def readLog(path, max_bytes, workspace):
 
 
 
+def deleteLog(path, workspace, in_use):
+    '''Delete one log file from the known log locations (not the agent's
+    own log, which is open, nor a running process's), then any folders it
+    leaves empty up to the log root.'''
+    real_path = os.path.realpath(os.path.expanduser(path))
+    if real_path in (os.path.realpath(LOG_PATH), os.path.realpath(VM_LOG_PATH)):
+        raise ValueError("this log is in use and can't be deleted")
+    # Not every log root: ~/.orca also holds the agent itself.
+    roots = [os.path.realpath(RUNS_DIR), os.path.realpath(ROS_LOG_DIRECTORY)]
+    if workspace:
+        roots.append(os.path.realpath(os.path.join(
+            os.path.expanduser(workspace), 'log')))
+    inside = [root for root in roots if real_path.startswith(root + os.sep)]
+    is_old_agent_log = real_path == os.path.realpath(LOG_PATH + '.1')
+    if not (inside or is_old_agent_log) or not os.path.isfile(real_path):
+        raise ValueError('not a log Orca can delete: ' + path)
+    if real_path in in_use:
+        raise ValueError('its process is still running')
+    size = os.path.getsize(real_path)
+    os.unlink(real_path)
+    if inside:
+        removeEmptyParents(os.path.dirname(real_path), inside[0])
+    return {'deleted': path, 'bytes': size}
+
+
+def removeEmptyParents(directory, root):
+    while directory.startswith(root + os.sep):
+        try:
+            os.rmdir(directory)  # only succeeds when empty
+        except OSError:
+            return
+        directory = os.path.dirname(directory)
+
+
+
+# --- Cleanup ------------------------------------------------------------------
+
+
+
+# What builds up on a machine over time, for the Logs page's cleanup panel.
+# Each category lists paths that can go; anything a running process uses is
+# left alone.
+OLD_AGENT_DIR = os.path.join(os.path.expanduser('~'), '.orchestrator')
+RECENT_FILE_S = 10 * 60
+NUM_KEPT_BUILDS = NUM_RECENT_BUILDS
+
+
+def pathSize(path):
+    '''Bytes in a file or folder (not following links).'''
+    if os.path.islink(path):
+        return 0
+    if not os.path.isdir(path):
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+    total = 0
+    for root, _, names in os.walk(path):
+        for name in names:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def removePath(path):
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.unlink(path)
+
+
+def isLocked(lock_path):
+    '''True if a daemon holds this lock file (an agent still running).'''
+    try:
+        with open(lock_path, 'a') as file:
+            fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(file, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+
+
+def overlayFiles(overlay_directory, in_use):
+    '''Launch overlays Orca wrote that no running process uses (they're
+    removed when their process exits; these are from crashes and older
+    Orca versions), and half-written temporary files.'''
+    if not overlay_directory:
+        return []
+    directory = os.path.expanduser(overlay_directory)
+    found = glob.glob(os.path.join(directory, 'orca-*.json')) + glob.glob(
+        os.path.join(directory, '*.tmp')) + glob.glob(
+        os.path.join(AGENT_DIR, '*.tmp'))
+    return [path for path in found if os.path.realpath(path) not in in_use]
+
+
+def runLogDirectories(in_use):
+    '''Orca run logs whose processes have all ended.'''
+    found = []
+    for path in glob.glob(os.path.join(RUNS_DIR, '*')):
+        real = os.path.realpath(path)
+        if os.path.isdir(path) and not any(
+                used.startswith(real + os.sep) for used in in_use):
+            found.append(path)
+    return found
+
+
+def rosLogEntries():
+    '''Everything in ~/.ros/log except what was written in the last few
+    minutes (it may belong to something running).'''
+    cutoff_s = time.time() - RECENT_FILE_S
+    return [path for path in glob.glob(os.path.join(ROS_LOG_DIRECTORY, '*'))
+            if not os.path.islink(path) and modifiedTime(path) < cutoff_s]
+
+
+def oldBuildLogs(workspace):
+    '''colcon's log/build_* folders, all but the newest few (the Logs page
+    reads each package's newest log from those).'''
+    if not workspace:
+        return []
+    builds = sorted(glob.glob(os.path.join(
+        os.path.expanduser(workspace), 'log', 'build_*')), reverse=True)
+    return [path for path in builds[NUM_KEPT_BUILDS:]
+            if os.path.isdir(path) and not os.path.islink(path)]
+
+
+def oldAgentFolder():
+    '''~/.orchestrator, from before Orca was renamed (old run logs and the
+    old agent), unless an old agent daemon is still running there.'''
+    if not os.path.isdir(OLD_AGENT_DIR) \
+            or os.path.realpath(OLD_AGENT_DIR) == os.path.realpath(AGENT_DIR):
+        return []
+    if isLocked(os.path.join(OLD_AGENT_DIR, 'daemon.lock')):
+        return []
+    return [OLD_AGENT_DIR]
+
+
+CLEANUP_CATEGORIES = [
+    ('overlays', 'Launch overlays',
+     'Config overlays from launches that have ended, and half-written files.'),
+    ('run_logs', 'Orca run logs',
+     'Output of runs that have ended (deleted after 14 days anyway).'),
+    ('ros_logs', 'ROS logs',
+     '~/.ros/log, except files written in the last 10 minutes.'),
+    ('build_logs', 'Old build logs',
+     'colcon build logs, except the newest %d builds.' % NUM_KEPT_BUILDS),
+    ('old_agent', 'Old agent folder',
+     '~/.orchestrator, left from before Orca was renamed.'),
+]
+
+
+def cleanupPaths(category, params, in_use):
+    workspace = params.get('workspace')
+    if category == 'overlays':
+        return overlayFiles(params.get('overlay_directory'), in_use)
+    if category == 'run_logs':
+        return runLogDirectories(in_use)
+    if category == 'ros_logs':
+        return rosLogEntries()
+    if category == 'build_logs':
+        return oldBuildLogs(workspace)
+    if category == 'old_agent':
+        return oldAgentFolder()
+    raise ValueError('nothing called %s to clean up' % category)
+
+
+def cleanupScan(params, in_use):
+    categories = []
+    for category, label, description in CLEANUP_CATEGORIES:
+        paths = cleanupPaths(category, params, in_use)
+        categories.append({
+            'id': category, 'label': label, 'description': description,
+            'count': len(paths), 'bytes': sum(map(pathSize, paths))})
+    root = os.path.expanduser(params.get('workspace') or '~')
+    usage = shutil.disk_usage(root if os.path.isdir(root) else '/')
+    return {'categories': categories,
+            'disk': {'free_bytes': usage.free, 'total_bytes': usage.total}}
+
+
+def cleanup(params, in_use):
+    '''Delete what the given categories list now (looked up again, so
+    nothing that started being used since the scan goes).'''
+    removed = {}
+    errors = []
+    for category in params.get('categories') or []:
+        count = 0
+        size = 0
+        for path in cleanupPaths(category, params, in_use):
+            path_size = pathSize(path)
+            try:
+                removePath(path)
+            except OSError as error:
+                errors.append('%s: %s' % (path, error.strerror or error))
+                continue
+            count += 1
+            size += path_size
+        removed[category] = {'count': count, 'bytes': size}
+    return {'removed': removed, 'errors': errors[:20]}
+
+
 # --- Virtual machine (macOS host) ---------------------------------------------
 
 
@@ -1524,6 +1725,9 @@ class SupervisedProcess:
         self.cwd = os.path.expanduser(params.get('cwd') or '~')
         self.meta = params.get('meta') or {}
         self.extra_env = params.get('env') or {}
+        # Files written for this process only (its launch overlay).
+        self.remove_on_exit = [os.path.expanduser(path) for path
+                               in params.get('remove_on_exit') or []]
 
         # --- Lifecycle ---
         self.popen = None
@@ -1706,6 +1910,11 @@ class SupervisedProcess:
                    else 'killed by %s' % self.exit_signal)
         self.writeLog(('\n[orca: process %s]\n' % summary).encode())
         self.log_file.close()
+        for path in self.remove_on_exit:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
         self.manager.broadcastState(self)
 
     def output(self, from_line):
@@ -2080,6 +2289,9 @@ class Daemon:
             'bags.delete': self.methodBagsDelete,
             'logs.list': self.methodLogsList,
             'logs.read': self.methodLogsRead,
+            'logs.delete': self.methodLogsDelete,
+            'cleanup.scan': self.methodCleanupScan,
+            'cleanup.run': self.methodCleanupRun,
             'agent.shutdown': self.methodShutdown,
         }
 
@@ -2257,6 +2469,29 @@ class Daemon:
         return await self.inThread(
             readLog, params['path'], params.get('max_bytes', 1024 * 1024),
             params.get('workspace'))
+
+    def pathsInUse(self):
+        '''Files running processes use: their run logs and overlays.'''
+        paths = set()
+        for process in self.processes.processes.values():
+            if process.isRunning():
+                paths.add(os.path.realpath(process.log_path))
+                paths.update(os.path.realpath(path)
+                             for path in process.remove_on_exit)
+                paths.update(os.path.realpath(os.path.expanduser(
+                    argument.split(':=', 1)[1])) for argument in process.argv
+                    if argument.startswith('json_path:='))
+        return paths
+
+    async def methodLogsDelete(self, session, params):
+        return await self.inThread(deleteLog, params['path'],
+                                   params.get('workspace'), self.pathsInUse())
+
+    async def methodCleanupScan(self, session, params):
+        return await self.inThread(cleanupScan, params, self.pathsInUse())
+
+    async def methodCleanupRun(self, session, params):
+        return await self.inThread(cleanup, params, self.pathsInUse())
 
     async def methodShutdown(self, session, params):
         if not self.isIdle() and not params.get('force'):

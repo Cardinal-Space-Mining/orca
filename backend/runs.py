@@ -505,6 +505,7 @@ class Run:
 
     async def startProcess(self, entry):
         link = self.orca.links_by_id[entry['machine_id']]
+        remove_on_exit = []
         if 'run_script' in entry:
             argv = [entry['run_script']] + entry['flags'] + [
                 '%s:=%s' % item for item in entry['arguments'].items()]
@@ -515,6 +516,7 @@ class Run:
                 written = await link.call('file.write', {
                     'path': path, 'content': overlayJson(entry['overlay'])})
                 argv.append('json_path:=' + written['path'])
+                remove_on_exit.append(written['path'])  # the agent deletes it
         else:
             argv = entry['argv']
         record = await link.call('process.start', {
@@ -523,6 +525,7 @@ class Run:
             'argv': argv,
             'cwd': entry['cwd'],
             'env': entry.get('env') or {},
+            'remove_on_exit': remove_on_exit,
             'meta': {'run_id': self.run_id, 'run_label': self.label,
                      'scenario_id': self.scenario_id, 'key': entry['key'],
                      'kind': self.kind, 'task': bool(entry.get('task'))},

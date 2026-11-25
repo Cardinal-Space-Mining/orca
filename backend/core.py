@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import json
 import os
+import posixpath
 import shlex
 import socket
 from typing import Optional
@@ -17,7 +18,8 @@ from .addresses import Finder
 from .inventory import (Route, inventoryScopes, loadInventory,
                         readInventoryRaw, writeInventory)
 from .config_edit import DESCRIPTIONS_RELATIVE_PATH
-from .lance_config import CONFIG_RELATIVE_PATH, ConfigError, LanceConfig
+from .lance_config import (CONFIG_RELATIVE_PATH, INSTALLED_CONFIG_DIRECTORY,
+                           ConfigError, LanceConfig)
 from .budget import MONITOR_PROCESS_ID, BudgetTracker
 from .deploy import Deployer
 from .discovery import Discovery
@@ -475,6 +477,32 @@ class Orca:
         return await link.call('logs.read', {
             'path': path, 'max_bytes': max_bytes,
             'workspace': link.machine.workspace}, timeout_s=60.0)
+
+    async def deleteLog(self, machine_id: str, path: str) -> dict:
+        link = self.link(machine_id)
+        return await link.call('logs.delete', {
+            'path': path, 'workspace': link.machine.workspace})
+
+    # --- Cleanup ---
+
+    def cleanupParams(self, link) -> dict:
+        workspace = link.machine.workspace
+        return {'workspace': workspace,
+                'overlay_directory': posixpath.join(
+                    workspace, INSTALLED_CONFIG_DIRECTORY.replace(os.sep, '/'))
+                if workspace else None}
+
+    async def cleanupScan(self, machine_id: str) -> dict:
+        '''What could be deleted on a machine (Logs page), by category.'''
+        link = self.link(machine_id)
+        return await link.call('cleanup.scan', self.cleanupParams(link),
+                               timeout_s=60.0)
+
+    async def cleanup(self, machine_id: str, categories: list) -> dict:
+        link = self.link(machine_id)
+        return await link.call('cleanup.run', dict(
+            self.cleanupParams(link), categories=list(categories)),
+            timeout_s=120.0)
 
     async def stopProcess(self, machine_id: str, process_id: str):
         await self.link(machine_id).call('process.stop',

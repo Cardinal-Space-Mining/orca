@@ -1726,3 +1726,14 @@ tr.clickable:hover td { background: var(--surface-hover); }
 .tag.warn { color: var(--warn); background: var(--warn-soft); }
 .settings-grid > .panel { margin: 0; }
 .settings-grid .section-head { margin-top: 16px; }
+
+/* Logs page: cleanup. */
+.cleanup-item { margin-bottom: 8px; }
+.cleanup-item > span { display: inline-flex; align-items: center; gap: 6px;
+    color: var(--text); }
+.cleanup-table { margin-top: 6px; }
+.cleanup-table td { vertical-align: middle; }
+.cleanup-table td.numeric { text-align: right; white-space: nowrap;
+    color: var(--text-muted); }
+.cleanup-table .small-text { margin-top: 2px; }
+.panel-title-row + p { margin-top: 8px; }

@@ -11,6 +11,7 @@ import os
 import socket
 from typing import Optional
 
+from .addresses import Finder
 from .inventory import (Route, inventoryScopes, loadInventory,
                         readInventoryRaw, writeInventory)
 from .lance_config import ConfigError, LanceConfig
@@ -49,6 +50,7 @@ class Orchestrator:
         self.stop_event = None
         self.settings = loadSettings()
         self.budget = BudgetTracker(self)
+        self.finder = Finder(self)
         self.lance_config = None
         self.lance_config_error = None
 
@@ -67,7 +69,7 @@ class Orchestrator:
 
     # --- Lookups ---
 
-    def jumpRouteFor(self, machine_id: str) -> Route:
+    def jumpRouteFor(self, machine_id: str) -> Optional[Route]:
         return self.links_by_id[machine_id].jumpRoute()
 
     def referenceHead(self) -> Optional[str]:

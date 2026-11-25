@@ -87,6 +87,24 @@ def addressCandidates(target_link, from_link) -> list:
 
 
 
+def configAddress(target_link, from_link, kind: str) -> Optional[str]:
+    '''target_link's address on an interface of `kind` that from_link's
+    machine can reach (its own address when they're the same machine).'''
+    if target_link is from_link:
+        default_route = (target_link.state['stats'] or {}).get(
+            'default_route') or {}
+        own = sorted(
+            (entry['name'] != default_route.get('interface'), str(interface.ip))
+            for interface, entry in interfaceAddresses(
+                target_link.state['stats']) if entry['kind'] == kind)
+        return own[0][1] if own else None
+    for candidate in addressCandidates(target_link, from_link):
+        if candidate['kind'] == kind:
+            return candidate['address']
+    return None
+
+
+
 # --- Planning -----------------------------------------------------------------
 
 
@@ -284,6 +302,20 @@ class Planner:
             entry['cwd'] = link.machine.workspace or '~'
         return entry
 
+    def configAddresses(self, from_link) -> dict:
+        '''Current addresses of the machines that lance config constants
+        name (inventory "config_addresses"), as reached from from_link's
+        machine. Offline machines keep the files' values.'''
+        constants = {}
+        for target in self.orchestrator.links:
+            if target.connection is None or not target.state['stats']:
+                continue
+            for name, kind in target.machine.config_addresses.items():
+                address = configAddress(target, from_link, kind)
+                if address:
+                    constants[name] = address
+        return constants
+
     def planLance(self, lance, entry, link, options, addresses, extra):
         config = self.orchestrator.lanceConfig()
         if config is None:
@@ -293,16 +325,13 @@ class Planner:
             lance.get('args') or {}, options, addresses).items()}
         arguments.update(extra)
         settings = fillTemplate(lance.get('set') or {}, options, addresses)
-        tag = entry['key']
-        if settings:
-            overlay, extra_arguments, resolution = config.overlayFor(
-                arguments, settings, tag)
-            arguments.update(extra_arguments)
-            entry['overlay'] = overlay
-        else:
-            resolution = config.resolve(arguments)
+        overlay, extra_arguments, resolution, constants = config.overlayFor(
+            arguments, settings, entry['key'], self.configAddresses(link))
+        arguments.update(extra_arguments)
+        entry['overlay'] = overlay
         entry['selected'] = resolution['selected']
         entry['settings'] = settings
+        entry['constants'] = constants
 
         workspace = expandHome(link.machine.workspace, link.state['info'])
         entry['cwd'] = workspace

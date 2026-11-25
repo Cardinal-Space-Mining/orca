@@ -1,14 +1,18 @@
 '''
-Machine inventory: which machines the orchestrator manages and how to reach
+Machine inventory: which machines the orchestrator manages and how to find
 them.
 
 Two files are merged, the second overriding entries of the first by id:
     <workspace>/src/project/orchestrator/machines.json
             the team's machines (versioned with the code they run)
     ~/.config/orchestrator/machines.json
-            this user's own machines,
-                                                e.g. a personal test rig
+            this user's own machines, e.g. a personal test rig
 The orchestrator's own machine is always present as "local".
+
+Addresses change (DHCP), so the inventory says how to find a machine rather
+than where it is: names and addresses to try first, and the SSH host key that
+proves it's the right machine. Addresses the machine reports for itself are
+remembered separately (addresses.py) and tried as well.
 
 File format:
     {
@@ -19,16 +23,25 @@ File format:
                 "role": "Runs the robot code",
                 "host": "robot-mac",           // machine this VM runs on
                 "workspace": "~/lance-ws",     // colcon workspace (optional)
-                "routes": [                    // tried in order
-                    {"host": "10.11.11.15", "user": "csm"},
-                    {"host": "192.168.18.2", "user": "csm",
-                     "via": "robot-mac", "host_key_alias": "10.11.11.15"}
-                ]
+                "user": "lance",               // default for every route
+                // The name its host key is checked under, for every address
+                // (default: the first route's host).
+                "host_key_alias": "robot-vm.orchestrator",
+                "routes": [                    // tried first, in order
+                    {"host": "lance-vm.local"},
+                    {"host": "192.168.18.2", "via": "robot-mac"}
+                ],
+                // lance config constants that hold this machine's address:
+                // launches get its current address of that interface kind.
+                "config_addresses": {
+                    "ip.net1.mac_vm_eth": "ethernet",
+                    "ip.net1.mac_vm_wifi": "wifi"
+                }
             },
             {
                 "id": "robot-mac",
                 "label": "Robot mac host",
-                "routes": [{"host": "10.11.11.60", "user": "csm"}],
+                "routes": [{"host": "10.11.11.60", "user": "lance"}],
                 "vm": {"csm_vm_path": "~/code/csm-vm", "guest": "robot-vm"}
             }
         ]
@@ -71,6 +84,10 @@ class Route:
     # Check the host key under this name; lets a second address of the same
     # machine reuse its known_hosts entry.
     host_key_alias: Optional[str] = None
+    # Where the route came from: "inventory", or found at run time
+    # ("learned": an address the machine reported; "neighbour": its MAC
+    # seen at this address).
+    source: str = 'inventory'
 
     def target(self) -> str:
         return self.user + '@' + self.host if self.user else self.host
@@ -78,6 +95,8 @@ class Route:
     def describe(self) -> str:
         if self.via:
             return 'via ' + self.via + ' · ' + self.host
+        if self.source != 'inventory':
+            return self.source + ' · ' + self.host
         return 'direct · ' + self.host
 
 
@@ -98,6 +117,20 @@ class Machine:
     host: Optional[str] = None  # id of the machine this one runs on (VMs)
     vm: Optional[VmConfig] = None
     source: str = ''  # inventory file that defined it
+    user: Optional[str] = None  # default user for routes found at run time
+    host_key_alias: Optional[str] = None
+    # lance config constant ("ip.net1.mac_vm_eth") -> interface kind
+    config_addresses: dict = field(default_factory=dict)
+
+    def identity(self) -> Optional[str]:
+        '''The known_hosts name that proves a connection reached this
+        machine, whatever address it used.'''
+        if self.host_key_alias:
+            return self.host_key_alias
+        for route in self.routes:
+            if not route.via:
+                return route.host_key_alias or route.host
+        return None
 
     def toJson(self) -> dict:
         return {
@@ -111,6 +144,7 @@ class Machine:
                    'guest': self.vm.guest} if self.vm else None,
             'routes': [route.describe() for route in self.routes],
             'source': self.source,
+            'config_addresses': self.config_addresses,
         }
 
 
@@ -119,13 +153,28 @@ class Machine:
 
 
 
-def parseRoute(entry: dict, machine_id: str) -> Route:
+CONFIG_ADDRESS_KINDS = ('ethernet', 'wifi')
+
+
+def parseRoute(entry: dict, machine_id: str, defaults: dict) -> Route:
     if 'host' not in entry:
         raise InventoryError(
             "machine '%s': every route needs a 'host'" % machine_id)
-    return Route(host=entry['host'], user=entry.get('user'),
+    return Route(host=entry['host'],
+                 user=entry.get('user') or defaults.get('user'),
                  port=entry.get('port'), via=entry.get('via'),
-                 host_key_alias=entry.get('host_key_alias'))
+                 host_key_alias=entry.get('host_key_alias')
+                 or defaults.get('host_key_alias'))
+
+
+def parseConfigAddresses(entry: dict, machine_id: str) -> dict:
+    mapping = entry.get('config_addresses') or {}
+    for constant, kind in mapping.items():
+        if kind not in CONFIG_ADDRESS_KINDS:
+            raise InventoryError(
+                "machine '%s': config address %s must be one of %s"
+                % (machine_id, constant, ', '.join(CONFIG_ADDRESS_KINDS)))
+    return dict(mapping)
 
 
 def parseMachine(entry: dict, source: str) -> Machine:
@@ -139,13 +188,16 @@ def parseMachine(entry: dict, source: str) -> Machine:
         id=machine_id,
         label=entry.get('label', machine_id),
         role=entry.get('role', ''),
-        routes=[parseRoute(route, machine_id)
+        routes=[parseRoute(route, machine_id, entry)
                 for route in entry.get('routes', [])],
         workspace=entry.get('workspace'),
         host=entry.get('host'),
         vm=VmConfig(csm_vm_path=vm['csm_vm_path'], guest=vm.get('guest'))
         if vm else None,
         source=source,
+        user=entry.get('user'),
+        host_key_alias=entry.get('host_key_alias'),
+        config_addresses=parseConfigAddresses(entry, machine_id),
     )
 
 

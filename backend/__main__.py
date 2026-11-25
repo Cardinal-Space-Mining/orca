@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import shutil
+import subprocess
 import sys
 import webbrowser
 
@@ -18,6 +20,18 @@ from .server import HttpServer
 
 
 DEFAULT_PORT = 8740
+
+
+def openBrowser(url: str):
+    """Open the page without the browser's own console messages (crash
+    reporter, GPU warnings) ending up in the orchestrator's output."""
+    opener = 'open' if sys.platform == 'darwin' else 'xdg-open'
+    if shutil.which(opener):
+        subprocess.Popen([opener, url], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    else:
+        webbrowser.open(url)
 
 
 def detectWorkspace():
@@ -62,7 +76,7 @@ async def serve(arguments, workspace_root):
         state = 'found' if os.path.isfile(path) else 'not found'
         print('[ORCHESTRATOR]: inventory %s (%s)' % (path, state), flush=True)
     if not arguments.no_browser:
-        webbrowser.open(url)
+        openBrowser(url)
     async with server:
         await orchestrator.run()
 

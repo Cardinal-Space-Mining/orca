@@ -48,7 +48,9 @@ host and its VM:
         {
             "id": "robot-mac",
             "label": "Robot mac host",
-            "routes": [{"host": "10.11.11.34", "user": "csm"}],
+            "user": "lance",
+            "host_key_alias": "robot-mac.orchestrator",
+            "routes": [{"host": "10.11.11.34"}],
             "vm": {"csm_vm_path": "~/code/csm-vm", "guest": "robot-vm"}
         },
         {
@@ -56,11 +58,16 @@ host and its VM:
             "label": "Robot VM",
             "host": "robot-mac",
             "workspace": "~/lance-ws",
+            "user": "lance",
+            "host_key_alias": "robot-vm.orchestrator",
             "routes": [
-                {"host": "10.11.11.48", "user": "csm"},
-                {"host": "192.168.18.2", "user": "csm", "via": "robot-mac",
-                 "host_key_alias": "10.11.11.48"}
-            ]
+                {"host": "10.11.11.48"},
+                {"host": "192.168.18.2", "via": "robot-mac"}
+            ],
+            "config_addresses": {
+                "ip.net1.mac_vm_eth": "ethernet",
+                "ip.net1.mac_vm_wifi": "wifi"
+            }
         }
     ]
 }
@@ -68,15 +75,45 @@ host and its VM:
 
 - `routes` are tried together, each a moment after the previous one, and the
   first that answers wins (so earlier routes are preferred, and a machine on
-  two networks connects through whichever works). `via` jumps through another machine (here, the
-  mac's host-only link to its VM, which still works when the VM's own network
-  is down). `host_key_alias` checks the host key under another name, so a
-  second address of a machine doesn't trigger "unknown host".
-- **Prefer IP addresses over `.local` names** for machines with both Wi-Fi and
-  Ethernet: mDNS may resolve to the Wi-Fi address (see FINDINGS.md, M6).
+  two networks connects through whichever works). `via` jumps through another
+  machine (here, the mac's host-only link to its VM, which still works when
+  the VM's own network is down). `user` and `host_key_alias` on the machine
+  apply to every route that doesn't set its own.
 - `workspace` is a colcon workspace whose repo is `<workspace>/src`; the
   orchestrator shows its commit and whether it matches yours.
 - `vm` marks a mac that runs a csm-vm VM.
+
+### Addresses change; machines are found anyway
+
+Every network here hands out addresses with DHCP, so the addresses in the
+inventory are only a first guess. What identifies a machine is its **SSH host
+key**, checked under `host_key_alias` on every connection whatever address it
+used, so an address that now belongs to something else is never mistaken for
+the machine.
+
+- **Remembered addresses.** While a machine is connected, its agent reports
+  its Ethernet and Wi-Fi addresses and MACs. They're kept on your laptop in
+  `~/.config/orchestrator/addresses.json` (not in the team file, so it doesn't
+  change every time DHCP does) and tried after the inventory's routes: first
+  wherever the machine's MAC shows up in your laptop's neighbour (ARP) table
+  right now (*neighbour* routes), then addresses it had on a network you're on
+  (*learned* routes). The machine card shows which one it's connected on, and
+  where an offline machine was last seen.
+- **Discovery.** When a machine with known MACs can't be reached, the
+  orchestrator scans the networks your laptop is on (at most every 2 minutes;
+  the /24 around you and around its last address on bigger networks) so its
+  MAC shows up at its new address.
+- Found routes are only tried once the machine's host key is trusted, so the
+  first connection always goes through a route from the inventory.
+- **The robot code's addresses.** `lance/config` names machines by address
+  (`${ ip.net1.mac_vm_eth }`). `config_addresses` maps those constants to a
+  machine's interfaces, and every launch from the orchestrator replaces them
+  with the machine's current address, as seen from the machine the process runs
+  on. The launch page lists each replacement. The values in `shared.json` only
+  matter for launches started by hand.
+- `.local` names work as routes, but on a machine with Wi-Fi and Ethernet on
+  one network, mDNS may answer with the Wi-Fi address (FINDINGS.md, M6). The
+  remembered Ethernet address is tried as well.
 
 ## Scenarios
 
@@ -227,6 +264,17 @@ offered once an identical copy is here.
   `web/vendor/` (no build step, no internet needed). One module per page in
   `web/js/`; edit and reload.
 
+## Tests
+
+```bash
+cd src/orchestrator && python3 -m unittest discover -s tests -t .
+```
+
+Standard library only. They cover scenario templates, the inventory, launch
+config overlays (against your workspace's real config), rsync summaries, the
+bandwidth budget, the address book, and a real agent daemon started in a
+temporary directory.
+
 ## Status
 
 | Phase | What | State |
@@ -236,8 +284,13 @@ offered once an identical copy is here.
 | 2 | Deploy (compare, push, remote build, code fingerprints), bags, logs | done |
 | 3 | VM control, terminals and serial console; editing the inventory in the app | done |
 | 4 | Network tools, bandwidth budget, competition mode; resizable, dockable terminals | done |
-| 5 | Configurability: edit scenarios, launch-config presets (with descriptions) and orchestrator settings in the app | next |
-| 6 | Native macOS processes | |
+| 5 | Addressing: machines found by host key, remembered addresses, neighbour matching and discovery; live addresses in launches; a test suite | done |
+| 6 | Internet sharing over Ethernet (replaces netshare) | next |
+| 7 | Add-machine wizard with discovery | |
+| 8 | Setup checklist per machine (SSH key, sudoers, lingering, EEE...) | |
+| 9 | Configurability: edit scenarios, launch-config presets (with descriptions) and orchestrator settings in the app | |
+| 10 | Native macOS processes | |
+| later | Network map on the machines page (adapters, links with live traffic, discovery in place); icons throughout | |
 
 Bugs and inconsistencies found along the way, in this and other repos, are
 logged in [FINDINGS.md](FINDINGS.md). Test rig setup: [docs/dev-rig-setup.md](

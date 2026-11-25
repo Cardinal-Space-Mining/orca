@@ -2,6 +2,7 @@
 // orchestrator API.
 
 import { h } from 'preact';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import htm from 'htm';
 
 export const html = htm.bind(h);
@@ -90,6 +91,29 @@ export function StatusDot({ state }) {
     const isPulsing = level === 'warn';
     return html`<span class="dot ${level} ${isPulsing ? 'pulse' : ''}"
         title=${state}></span>`;
+}
+
+// A text input whose value is saved only when you press Enter or leave the
+// field. It keeps its own draft while you type, so re-renders from live
+// updates (machine status, a new plan) can't reset what you're typing.
+export function CommitInput({ value, onCommit, ...props }) {
+    const [draft, setDraft] = useState(value || '');
+    const isEditing = useRef(false);
+    useEffect(() => {
+        if (!isEditing.current) setDraft(value || '');
+    }, [value]);
+    function commit() {
+        isEditing.current = false;
+        if (draft !== (value || '')) onCommit(draft);
+    }
+    return html`<input ...${props} value=${draft}
+        onFocus=${() => { isEditing.current = true; }}
+        onInput=${(event) => {
+            isEditing.current = true;
+            setDraft(event.target.value);
+        }}
+        onBlur=${commit}
+        onKeyDown=${(event) => { if (event.key === 'Enter') commit(); }} />`;
 }
 
 // Render text with ANSI colour codes (ROS log levels, launch prefixes) as

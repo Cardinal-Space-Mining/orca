@@ -213,10 +213,38 @@ class LanceConfig:
         selected = dict(CONFIGURED_PATTERN.findall(log.getvalue()))
         return {'selected': selected, 'config': resolved}
 
-    def overlayFor(self, arguments: dict, settings: dict, tag: str):
-        '''Build the overlay that applies `settings` ({action: {key: value}})
-        on top of what `arguments` select. Returns (overlay, extra arguments,
-        resolution with the overlay applied).'''
+    def addressConstants(self) -> dict:
+        '''Every constant under "ip" ({"ip.net1.mac_vm_eth": "10.11.11.48"}),
+        for mapping machines to them.'''
+        found = {}
+
+        def walk(prefix, value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    walk(prefix + '.' + key, item)
+            elif isinstance(value, str):
+                found[prefix] = value
+
+        walk('ip', self.load().get(CONSTANTS_TAG, {}).get('ip', {}))
+        return found
+
+    def constant(self, name: str):
+        """A constant's value in the files, e.g. "ip.net1.mac_vm_eth"."""
+        value = self.load().get(CONSTANTS_TAG, {})
+        for part in name.split('.'):
+            if not isinstance(value, dict) or part not in value:
+                return None
+            value = value[part]
+        return value
+
+    def overlayFor(self, arguments: dict, settings: dict, tag: str,
+                   constants: Optional[dict] = None):
+        """Build the overlay that applies `settings` ({action: {key:
+        value}}) on top of what `arguments` select, and replaces
+        `constants` ({"ip.net1.mac_vm_eth": "10.0.0.5"}: machines' current
+        addresses). Returns (overlay or None if nothing changes, extra
+        arguments, resolution with the overlay applied, the constants that
+        changed: [{name, value, was}])."""
         base = self.resolve(arguments)
         overlay = {'pragma:enable_preproc': True,
                    'pragma:import': ['launch.json']}
@@ -233,13 +261,39 @@ class LanceConfig:
             overlay[action] = {derived_name: preset}
             extra_arguments[action] = derived_name
 
-        # Resolve again with the overlay merged in, as launch-utils will.
+        changed = []
+        replacements = {}
+        for name, value in sorted((constants or {}).items()):
+            was = self.constant(name)
+            if was is not None and was != value:
+                changed.append({'name': name, 'value': value, 'was': was})
+                node = replacements
+                parts = name.split('.')
+                for part in parts[:-1]:
+                    node = node.setdefault(part, {})
+                node[parts[-1]] = value
+        if replacements:
+            overlay[CONSTANTS_TAG] = replacements
+
+        if not extra_arguments and not replacements:
+            return None, {}, base, []
+        # Resolve again with the overlay merged in, as launch-utils will
+        # (the overlay's keys win over the imported files').
         merged = copy.deepcopy(self.load())
         for action, presets in overlay.items():
             if not action.startswith('pragma:'):
                 merged[action].update(copy.deepcopy(presets))
+        mergeInto(merged.setdefault(CONSTANTS_TAG, {}), replacements)
         final = self.resolve(dict(arguments, **extra_arguments), merged)
-        return overlay, extra_arguments, final
+        return overlay, extra_arguments, final, changed
+
+
+def mergeInto(target: dict, source: dict):
+    for key, value in source.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            mergeInto(target[key], value)
+        else:
+            target[key] = copy.deepcopy(value)
 
 
 def overlayJson(overlay: dict) -> str:

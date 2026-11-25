@@ -33,6 +33,12 @@ function cleanEntry(entry) {
         }
         return tidy;
     });
+    if (cleaned.config_addresses) {
+        const mapping = Object.fromEntries(Object.entries(
+            cleaned.config_addresses).filter(([name]) => name.trim()));
+        if (Object.keys(mapping).length) cleaned.config_addresses = mapping;
+        else delete cleaned.config_addresses;
+    }
     if (cleaned.vm) {
         cleaned.vm = { ...cleaned.vm };
         if (!cleaned.vm.guest) delete cleaned.vm.guest;
@@ -42,6 +48,59 @@ function cleanEntry(entry) {
 
 
 // --- One machine -------------------------------------------------------------
+
+// Address constants in the lance config ("ip.net1.mac_vm_eth" -> value),
+// fetched once for suggestions.
+let constantsPromise = null;
+
+function useAddressConstants() {
+    const [constants, setConstants] = useState({});
+    useEffect(() => {
+        constantsPromise = constantsPromise || getJson('/api/config')
+            .then((config) => config.constants || {})
+            .catch(() => ({}));
+        constantsPromise.then(setConstants);
+    }, []);
+    return constants;
+}
+
+function ConfigAddresses({ value, onChange }) {
+    const constants = useAddressConstants();
+    const entries = Object.entries(value || {});
+    const update = (next) => onChange(
+        next.length ? Object.fromEntries(next) : null);
+    const replace = (index, entry) => update(entries.map(
+        (other, position) => position === index ? entry : other));
+    return html`
+        <div class="section-head"><span>Config addresses</span></div>
+        <p class="faint small-note">lance config constants that hold this
+            machine's address. Launches from the orchestrator fill them with
+            its current address, so the config files can be out of date.</p>
+        ${entries.map(([name, kind], index) => html`
+            <div class="config-address-row" key=${index}>
+                <input class="input mono" list="address-constants"
+                    value=${name} placeholder="ip.net1.mac_vm_eth"
+                    onInput=${(event) => replace(index,
+                        [event.target.value, kind])} />
+                <select class="input" value=${kind}
+                    onChange=${(event) => replace(index,
+                        [name, event.target.value])}>
+                    <option value="ethernet">its Ethernet address</option>
+                    <option value="wifi">its Wi-Fi address</option>
+                </select>
+                <span class="faint mono">${name && (name in constants
+                    ? `config: ${constants[name]}` : 'not in the config')}
+                    </span>
+                <button class="link-button" title="Remove"
+                    onClick=${() => update(entries.filter(
+                        (_, position) => position !== index))}>✕</button>
+            </div>`)}
+        <datalist id="address-constants">${Object.keys(constants).map(
+            (name) => html`<option value=${name} />`)}</datalist>
+        <button class="button small" onClick=${() =>
+            update([...entries, ['', 'ethernet']])}>
+            Add config address</button>`;
+}
 
 function TextField({ label, value, placeholder, onChange, mono = false }) {
     return html`
@@ -65,14 +124,15 @@ function MachineSelect({ label, value, ids, onChange, emptyLabel }) {
         </label>`;
 }
 
-function RouteRow({ route, index, count, ids, onChange, onMove, onRemove }) {
+function RouteRow({ route, index, count, ids, defaults, onChange, onMove,
+    onRemove }) {
     const set = (key) => (value) => onChange({ ...route, [key]: value });
     return html`
         <div class="route-row">
             <span class="route-number">${index + 1}</span>
             <input class="input mono" placeholder="address" value=${route.host}
                 onInput=${(event) => set('host')(event.target.value)} />
-            <input class="input mono" placeholder="user"
+            <input class="input mono" placeholder=${defaults.user || 'user'}
                 value=${route.user || ''}
                 onInput=${(event) => set('user')(event.target.value)} />
             <input class="input mono short" placeholder="22"
@@ -83,7 +143,8 @@ function RouteRow({ route, index, count, ids, onChange, onMove, onRemove }) {
                 <option value="">direct</option>
                 ${ids.map((id) => html`<option value=${id}>via ${id}</option>`)}
             </select>
-            <input class="input mono" placeholder="host key name (optional)"
+            <input class="input mono"
+                placeholder=${defaults.host_key_alias || 'host key name'}
                 value=${route.host_key_alias || ''}
                 onInput=${(event) => set('host_key_alias')(
                     event.target.value)} />
@@ -138,6 +199,16 @@ function MachineForm({ entry, ids, onChange, onRemove }) {
                             emptyLabel="its own hardware"
                             onChange=${set('host')} />
                     </div>
+                    <div class="fields">
+                        <${TextField} label="User" value=${entry.user} mono
+                            placeholder="for every route, e.g. lance"
+                            onChange=${set('user')} />
+                        <${TextField} label="Host key name"
+                            value=${entry.host_key_alias} mono
+                            placeholder=${`${entry.id || 'robot-vm'}`
+                                + '.orchestrator'}
+                            onChange=${set('host_key_alias')} />
+                    </div>
                     <label class="check">
                         <input type="checkbox" checked=${!!entry.vm}
                             onChange=${(event) => set('vm')(event.target.checked
@@ -156,6 +227,11 @@ function MachineForm({ entry, ids, onChange, onRemove }) {
                     </div>`}
                     <div class="section-head"><span>Routes, tried in order
                         </span></div>
+                    <p class="faint small-note">Names or addresses to try
+                        first. Addresses the machine reports while connected
+                        are remembered on this laptop and tried too, so these
+                        can be out of date; its host key proves it's the right
+                        machine.</p>
                     <div class="route-head">
                         <span></span><span>Address</span><span>User</span>
                         <span>Port</span><span>Via</span>
@@ -164,6 +240,7 @@ function MachineForm({ entry, ids, onChange, onRemove }) {
                     ${routes.map((route, index) => html`<${RouteRow}
                         key=${index} route=${route} index=${index}
                         count=${routes.length} ids=${otherIds}
+                        defaults=${entry}
                         onChange=${(next) => setRoutes(routes.map(
                             (other, position) => position === index
                                 ? next : other))}
@@ -179,6 +256,10 @@ function MachineForm({ entry, ids, onChange, onRemove }) {
                         <button class="button small" onClick=${() =>
                             setRoutes([...routes, { ...EMPTY_ROUTE }])}>
                             Add route</button>
+                    </div>
+                    <${ConfigAddresses} value=${entry.config_addresses}
+                        onChange=${set('config_addresses')} />
+                    <div class="button-row">
                         <span class="spacer"></span>
                         <button class="button small danger"
                             onClick=${onRemove}>Remove machine</button>

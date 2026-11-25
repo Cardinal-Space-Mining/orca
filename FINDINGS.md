@@ -27,6 +27,7 @@ orchestrator avoids it; the underlying issue is still there).
 | L13 | `sync.sh` | Pushes `__pycache__`/`.pyc` files along with the code. | worked around (orchestrator) |
 | L14 | `build.sh` | Runs colcon twice (everything but lance, then lance), so `log/latest_build` only holds lance's logs; the other packages' logs are in the previous `build_*` directory. Not a bug, but easy to trip over when looking for a build error. | info (orchestrator lists each package's newest log) |
 | L15 | `net_adapter` motor `*/info` channels | In the two-machine motor sim, the five Talon `*/info` topics sent to the client were 120 of net_adapter's 129 kbps (24 kbps each, at the motor-sim rate). Not a bug; the obvious place to look if the real robot comes close to the 4,000 kbps budget. | info |
+| L16 | `lance/config/actions/shared.json` `ip.*` | The addresses are the last ones DHCP happened to give each machine (the LattePandas set theirs statically); they go stale when leases change, and `redux` presets and the lidar driver read them. The orchestrator now replaces the mapped ones with live addresses at launch (`config_addresses` in the inventory); launches by hand still use the file. | worked around (orchestrator) |
 
 ## csm-vm
 
@@ -38,6 +39,7 @@ orchestrator avoids it; the underlying issue is still there).
 | V4 | `docs/vm-management.md` | Lists a `MAC` variable; the script uses `MAC_BRIDGE`, `MAC_HOST` and `MAC_WIFI`. | open |
 | V5 | `run-vm.sh` `run_daemon` | Started QEMU in the background and returned success without checking it was running, so a failed start looked like success. | fixed in csm-vm (uncommitted): waits 3 s and reports |
 | V6 | `run-vm.sh` daemon/launchd modes | No serial console: the only way into a VM with broken networking was stopping it and restarting with `--term`. | fixed in csm-vm (uncommitted): serial port on `/tmp/qemu-serial.sock` |
+| V7 | `run-vm.sh` `MAC_BRIDGE`, `MAC_HOST`, `MAC_WIFI` | Hard-coded (52:54:00:12:34:56/57/58), so every VM started from csm-vm without its own config has the same MACs: the robot VM and the M2 VM most likely do. Two of them on one network would fight over the address, and MACs can't tell them apart (the orchestrator ignores MACs that more than one machine reported). Give each VM its own MACs in its csm-vm config. | open |
 
 ## Test machines (M2 mac mini + VM)
 

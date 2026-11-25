@@ -370,6 +370,7 @@ class HttpServer:
                               or 'the orchestrator has no workspace')
         if request.method == 'GET' and parts == []:
             return {'actions': config.actions(),
+                    'constants': config.addressConstants(),
                     'path': config.config_path}
         if request.method == 'GET' and parts == ['preset']:
             return config.resolvePreset(request.queryValue('action'),

@@ -1711,6 +1711,7 @@ class Daemon:
             'net.ping': self.methodNetPing,
             'net.tcp': self.methodNetTcp,
             'net.scan': self.methodNetScan,
+            'net.neighbours': self.methodNetNeighbours,
             'bags.list': self.methodBagsList,
             'bags.delete': self.methodBagsDelete,
             'logs.list': self.methodLogsList,
@@ -1856,6 +1857,10 @@ class Daemon:
         ports = [int(port) for port in params.get('ports') or [22]]
         return await scanNetwork(params['cidr'], ports,
                                  float(params.get('timeout_s', 0.6)))
+
+    async def methodNetNeighbours(self, session, params):
+        '''{ip: mac} of hosts this machine has talked to recently.'''
+        return await self.inThread(neighbourTable)
 
     async def methodBagsList(self, session, params):
         return await self.inThread(listBags, params['workspace'])

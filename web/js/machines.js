@@ -445,6 +445,23 @@ function OfflineNotice({ machineId, connection, now }) {
             machineId=${machineId} route=${connection.unknown_host_key} />`}`;
 }
 
+// Where an offline machine was last seen: these addresses are tried along
+// with the inventory's routes.
+function LastSeen({ addresses, now }) {
+    if (!addresses || addresses.length === 0) return null;
+    return html`
+        <div class="last-seen">
+            <span class="faint">Last seen at</span>
+            ${addresses.slice(0, 4).map((address) => html`
+                <span class="chip mono" title=${`${address.interface}`
+                    + `${address.mac ? ` · ${address.mac}` : ''}`}>
+                    ${address.address}${' '}
+                    <span class="faint">${address.kind === 'wifi'
+                        ? 'Wi-Fi' : 'Ethernet'}, ${formatAgo(
+                        address.seen_s, now)}</span></span>`)}
+        </div>`;
+}
+
 function MachineCard({ entry, machinesById, reference, now }) {
     const { machine, connection, info, stats, workspace, vm } = entry;
     const isOnline = connection.state === 'online';
@@ -472,6 +489,8 @@ function MachineCard({ entry, machinesById, reference, now }) {
             <${ConnectionRow} connection=${connection} info=${info} />
             <${OfflineNotice} machineId=${machine.id} connection=${connection}
                 now=${now} />
+            ${!isOnline && html`<${LastSeen} addresses=${entry.addresses}
+                now=${now} />`}
             ${!stats && !isOnline ? null : html`<${CardBody} entry=${entry}
                 guestEntry=${guestEntry} reference=${reference}
                 now=${now} />`}

@@ -1082,6 +1082,15 @@ body.is-resizing .terminal-view { opacity: 0.85; }
 .route-row { margin-bottom: 6px; }
 .route-row .input { padding: 5px 8px; font-size: 12.5px; }
 .route-number { color: var(--text-faint); font-size: 12px; }
+.config-address-row {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr 1fr 24px;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 6px;
+}
+.config-address-row .input { padding: 5px 8px; font-size: 12.5px; }
+.small-note { font-size: 12px; margin: 0 0 8px; }
 .route-buttons { display: flex; gap: 8px; }
 .route-buttons .link-button:disabled { opacity: 0.3; cursor: default; }
 .code-editor {
@@ -1233,3 +1242,13 @@ body.is-resizing .terminal-view { opacity: 0.85; }
 .paused-notice { display: flex; align-items: center; gap: 10px;
     margin-bottom: 6px; padding: 6px 10px; border-radius: 6px;
     background: var(--warn-soft); color: #ffd48a; font-size: 12.5px; }
+
+/* Addresses an offline machine was last seen at. */
+.last-seen {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 8px 0 2px;
+    font-size: 12px;
+}

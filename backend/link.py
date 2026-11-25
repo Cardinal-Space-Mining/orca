@@ -272,7 +272,9 @@ class MachineLink:
     # --- State ---
 
     def snapshot(self) -> dict:
-        return dict(self.state, machine=self.machine.toJson())
+        return dict(self.state, machine=self.machine.toJson(),
+                    addresses=self.orchestrator.finder.book.snapshot(
+                        self.machine.id))
 
     def publish(self):
         self.orchestrator.publish('machine', self.snapshot())
@@ -301,10 +303,12 @@ class MachineLink:
         if self.connection is not None:
             asyncio.ensure_future(self.connection.close())
 
-    def jumpRoute(self) -> Route:
+    def jumpRoute(self) -> Optional[Route]:
         """Route for other machines to jump through: the live one if
         connected, else the first listed."""
-        return self.active_route or self.machine.routes[0]
+        if self.active_route is not None:
+            return self.active_route
+        return self.machine.routes[0] if self.machine.routes else None
 
     async def call(self, method: str, params: Optional[dict] = None,
                    timeout_s: float = CALL_TIMEOUT_S):
@@ -333,12 +337,27 @@ class MachineLink:
                 pass
 
     async def connectAnyRoute(self) -> bool:
-        routes = self.machine.routes or [None]  # None: the local machine
+        finder = self.orchestrator.finder
+        if self.machine.is_local:
+            routes = [None]  # None: run the agent directly
+        else:
+            # The inventory's routes first (in its order), then addresses
+            # found at run time (addresses.py).
+            routes = (list(self.machine.routes)
+                      + await finder.foundRoutes(self.machine))
+        if not routes:
+            self.setConnection(
+                state='connecting', retry_at_s=None, unknown_host_key=None,
+                route=None, error='no address known yet: add a route, or '
+                'connect it once so its addresses are remembered')
+            return False
         self.setConnection(
             state='connecting', retry_at_s=None, unknown_host_key=None,
             route=self.describeRoutes(routes))
         winner = await self.firstReachable(routes)
         if winner is None:
+            if finder.book.macs(self.machine.id):
+                finder.requestDiscovery()
             return False
         route, connection, first = winner
         self.setConnection(route=route.describe() if route else 'local')
@@ -557,6 +576,7 @@ class MachineLink:
         os.makedirs(os.path.dirname(known_hosts), mode=0o700, exist_ok=True)
         with open(known_hosts, 'a') as file:
             file.writelines(lines)
+        self.orchestrator.finder.forgetKnownHosts()
         self.requestReconnect()
 
     # --- While connected ---
@@ -652,9 +672,13 @@ class MachineLink:
         while True:
             await asyncio.sleep(ROUTE_UPGRADE_PERIOD_S)
             routes = self.machine.routes
-            if self.active_route not in routes or self.terminals:
+            if self.terminals or self.active_route is None:
                 continue
-            for route in routes[:routes.index(self.active_route)]:
+            if self.active_route in routes:
+                preferred = routes[:routes.index(self.active_route)]
+            else:
+                preferred = routes  # on a found address: any listed route
+            for route in preferred:
                 _, connection, _, _ = await self.probe(route, 0)
                 if connection is not None:
                     await connection.close()
@@ -701,6 +725,9 @@ class MachineLink:
             self.addInterfaceRates(data)
             self.state['stats'] = data
             self.orchestrator.budget.onStats(self.machine.id, data)
+            if not self.machine.is_local:
+                self.orchestrator.finder.onStats(self.machine.id, data,
+                                                 self.active_route)
             self.publish()
         elif name == 'process.state':
             self.onProcessState(data)

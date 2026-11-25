@@ -3,7 +3,8 @@
 // then launch.
 
 import { useEffect, useState } from 'preact/hooks';
-import { html, getJson, postJson, StatusDot } from './common.js';
+import { html, getJson, postJson, StatusDot, CommitInput }
+    from './common.js';
 
 
 // --- Scenario list -----------------------------------------------------------
@@ -67,21 +68,28 @@ function OptionPicker({ name, definition, value, onChange }) {
 
 function AddressPicker({ process, role, value, onChange }) {
     const choices = process.address_choices[role] || [];
-    const isCustom = value && !choices.some((choice) =>
+    const isChoice = !value || choices.some((choice) =>
         choice.address === value);
+    // "other…" stays selected while its field is empty.
+    const [wantsCustom, setWantsCustom] = useState(!isChoice);
+    const isCustom = wantsCustom || !isChoice;
     return html`
         <div class="address-row">
             <span class="muted">${role} address</span>
             <select class="input mono" value=${isCustom ? '__custom' : value}
-                onChange=${(event) => onChange(event.target.value === '__custom'
-                    ? (value || '') : event.target.value)}>
+                onChange=${(event) => {
+                    const isOther = event.target.value === '__custom';
+                    setWantsCustom(isOther);
+                    if (!isOther) onChange(event.target.value);
+                }}>
                 ${choices.map((choice) => html`<option value=${choice.address}>
                     ${choice.address} (${choice.interface}, ${choice.reason})
                     </option>`)}
                 <option value="__custom">other…</option>
             </select>
-            ${isCustom && html`<input class="input mono" value=${value}
-                onChange=${(event) => onChange(event.target.value)} />`}
+            ${isCustom && html`<${CommitInput} class="input mono"
+                value=${isChoice ? '' : value} placeholder="address"
+                onCommit=${onChange} />`}
         </div>`;
 }
 
@@ -104,6 +112,15 @@ function ProcessPlan({ process, addresses, setAddress, extra, setExtra }) {
                     || process.addresses[role]}
                 onChange=${(value) => setAddress(`${process.key}.${role}`,
                     value)} />`)}
+            ${(process.constants || []).length > 0 && html`
+                <div class="settings-row"><span class="muted"
+                    title="Current addresses instead of the config's">
+                    addresses</span>
+                    ${process.constants.map((constant) => html`
+                        <span class="mono chip"
+                            title=${`config says ${constant.was}`}>${
+                            `${constant.name} = ${constant.value}`}</span>`)}
+                </div>`}
             ${Object.entries(settings).map(([action, values]) => html`
                 <div class="settings-row"><span class="muted">sets</span>
                     ${Object.entries(values).map(([key, value]) => html`
@@ -111,9 +128,9 @@ function ProcessPlan({ process, addresses, setAddress, extra, setExtra }) {
                             JSON.stringify(value)}`}</span>`)}</div>`)}
             <label class="field wide">
                 <span>Extra arguments</span>
-                <input class="input mono" value=${extra}
-                    placeholder="e.g. foxglove_bridge:=null"
-                    onChange=${(event) => setExtra(event.target.value)} />
+                <${CommitInput} class="input mono" value=${extra}
+                    placeholder="e.g. foxglove_bridge:=null (Enter to apply)"
+                    onCommit=${setExtra} />
             </label>
             <button class="link-button" onClick=${() =>
                 setShowDetails(!showDetails)}>

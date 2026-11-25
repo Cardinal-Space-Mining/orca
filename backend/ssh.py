@@ -50,6 +50,8 @@ def sshBaseCommand(route: Route, jumpRouteFor) -> list:
         command += ['-o', 'HostKeyAlias=' + route.host_key_alias]
     if route.via:
         jump_route = jumpRouteFor(route.via)
+        if jump_route is None:
+            raise OSError('no route to %s yet' % route.via)
         jump_command = (sshBaseCommand(jump_route, jumpRouteFor)
                         + ['-W', '%h:%p', jump_route.target()])
         command += ['-o', 'ProxyCommand=' + shlex.join(jump_command)]
@@ -71,6 +73,8 @@ def keyscanCommand(route: Route, jumpRouteFor) -> list:
     if not route.via:
         return keyscan
     jump_route = jumpRouteFor(route.via)
+    if jump_route is None:
+        raise OSError('no route to %s yet' % route.via)
     return sshCommand(jump_route, jumpRouteFor, shlex.join(keyscan))
 
 

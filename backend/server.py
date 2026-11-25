@@ -26,11 +26,22 @@ Small HTTP server for the orchestrator's web interface (standard library only).
     POST /api/machines/<id>/vm/<action>     start, stop, restart, kill, commit,
                                             backup, restore (a run)
     POST /api/machines/<id>/terminals       {"kind": "shell"|"serial"|
-                                            "share-install"}
+                                            "share-install"|"install-key"|
+                                            "setup" + {"check"}}
     POST /api/machines/<id>/sharing/up      {"downstream", "upstream",
                                             "subnet", "dns", "lease"}
     POST /api/machines/<id>/sharing/down    {"name"}
     POST /api/machines/<id>/sharing/refresh
+    POST /api/machines/<id>/setup/refresh   re-run its setup checklist
+    GET  /api/discovery/networks?machine_id= networks worth scanning from it
+    POST /api/discovery/scan                {"machine_id", "cidr"}: hosts,
+                                            with known machines marked
+    POST /api/discovery/host-key            {"address", "user", "port", "via",
+                                            "host_key_alias"}: its keys
+    POST /api/discovery/trust               the same + {"fingerprints"}
+    POST /api/discovery/probe               the same + {"id", "label"}:
+                                            connect once, suggest an entry
+    POST /api/discovery/add                 {"scope", "entry"}
     POST /api/machines/<id>/terminals/<t>/input|resize|close
     GET  /api/settings, POST /api/settings  orchestrator settings (competition
                                             mode, budget sources)
@@ -243,6 +254,8 @@ class HttpServer:
                 return {'ok': True}
         if parts[:1] == ['config']:
             return self.answerConfig(request, parts[1:])
+        if parts[:1] == ['discovery'] and len(parts) == 2:
+            return await self.answerDiscovery(request, parts[1])
         if method == 'GET' and parts == ['settings']:
             return orchestrator.settings
         if method == 'POST' and parts == ['settings']:
@@ -300,6 +313,10 @@ class HttpServer:
                 link = orchestrator.link(machine_id)
                 await orchestrator.sharing.refresh(link)
                 return link.state['sharing'] or {}
+        if method == 'POST' and parts == ['setup', 'refresh']:
+            link = orchestrator.link(machine_id)
+            await orchestrator.setup.refresh(link)
+            return link.state['setup']
         if method == 'POST' and parts[:1] == ['terminals']:
             return await self.answerTerminal(request, machine_id, parts[1:])
         if parts[:1] == ['bags']:
@@ -344,6 +361,27 @@ class HttpServer:
                 timeout_s=120.0)
         return None
 
+    async def answerDiscovery(self, request: Request, action: str):
+        discovery = self.orchestrator.discovery
+        if request.method == 'GET' and action == 'networks':
+            return {'networks': discovery.networks(
+                request.queryValue('machine_id', 'local'))}
+        if request.method != 'POST':
+            return None
+        body = request.json()
+        if action == 'scan':
+            return await discovery.scan(body.get('machine_id') or 'local',
+                                        body['cidr'])
+        if action == 'host-key':
+            return await discovery.hostKey(body)
+        if action == 'trust':
+            return await discovery.trustKey(body)
+        if action == 'probe':
+            return await discovery.probe(body)
+        if action == 'add':
+            return await discovery.add(body.get('scope'), body['entry'])
+        return None
+
     async def answerTerminal(self, request: Request, machine_id: str,
                              parts: list):
         orchestrator = self.orchestrator
@@ -351,7 +389,7 @@ class HttpServer:
         if parts == []:
             return await orchestrator.openTerminal(
                 machine_id, body.get('kind', 'shell'),
-                int(body.get('cols', 100)), int(body.get('rows', 30)))
+                int(body.get('cols', 100)), int(body.get('rows', 30)), body)
         if len(parts) != 2:
             return None
         terminal_id, action = parts

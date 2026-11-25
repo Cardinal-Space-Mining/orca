@@ -747,6 +747,217 @@ def installedRosDistros():
 
 
 
+# --- Setup checklist ------------------------------------------------------------
+
+# One-time setup a machine needs, checked without sudo. The orchestrator
+# offers a fix for most items (a script run in a terminal, where sudo can ask
+# for a password).
+
+EEE_DRIVERS = ('r8152',)  # Realtek RTL8153/8156 USB Ethernet
+EEE_UDEV_RULE = '/etc/udev/rules.d/70-orchestrator-eee.rules'
+CAN_COMMANDS = ('/usr/bin/slcand', 'link set can0 up')
+VM_COMMANDS = ('/opt/homebrew/bin/qemu-system-aarch64',
+               '/opt/homebrew/bin/socat')
+
+
+def sudoAllows(argv):
+    """True if sudo runs this command without asking for a password."""
+    completed = subprocess.run(['sudo', '-n', '-l'] + list(argv),
+                               capture_output=True, text=True)
+    return completed.returncode == 0
+
+
+def eeeInterfaces():
+    """USB Ethernet adapters prone to dropping packets with EEE, and
+    whether EEE is on for each."""
+    found = []
+    for path in sorted(glob.glob('/sys/class/net/*/device/driver')):
+        name = path.split('/')[4]
+        driver = os.path.basename(os.path.realpath(path))
+        if driver not in EEE_DRIVERS:
+            continue
+        output = runCommand(['ethtool', '--show-eee', name]) or \
+            runCommand(['/usr/sbin/ethtool', '--show-eee', name]) or ''
+        match = re.search(r'EEE status:\s*(\w+)', output)
+        found.append({'name': name, 'driver': driver,
+                      'eee_on': bool(match) and match.group(1) == 'enabled'})
+    return found
+
+
+def setupChecks(options):
+    """[{id, title, state: ok|todo|optional, detail}] for this machine.
+    options: workspace, csm_vm_path, tags (can, sharing), is_local,
+    share_helper_hash."""
+    checks = []
+    tags = set(options.get('tags') or [])
+
+    def check(check_id, title, state, detail):
+        checks.append({'id': check_id, 'title': title, 'state': state,
+                       'detail': detail})
+
+    user = getpass.getuser()
+    if not IS_MACOS:
+        if not options.get('is_local'):
+            linger = (runCommand(['loginctl', 'show-user', user, '-p',
+                                  'Linger', '--value']) or '').strip()
+            check('linger', 'Lingering', 'ok' if linger == 'yes' else 'todo',
+                  'Processes the orchestrator starts keep running when SSH '
+                  'sessions end.' if linger == 'yes' else
+                  'Off: systemd may stop processes started over SSH when the '
+                  'session ends.')
+        if options.get('workspace'):
+            has_rsync = shutil.which('rsync') is not None
+            check('rsync', 'rsync', 'ok' if has_rsync else 'todo',
+                  'Deploying code uses it.' if has_rsync
+                  else 'Missing: the Deploy page needs it.')
+        avahi = (runCommand(['systemctl', 'is-active', 'avahi-daemon'])
+                 or '').strip() == 'active'
+        hostname = socket.gethostname().split('.')[0]
+        check('avahi', 'mDNS name', 'ok' if avahi else 'optional',
+              'Answers to %s.local.' % hostname if avahi else
+              'avahi-daemon isn\'t running: %s.local doesn\'t resolve '
+              '(the orchestrator finds it anyway).' % hostname)
+        adapters = eeeInterfaces()
+        if adapters:
+            has_rule = os.path.exists(EEE_UDEV_RULE)
+            on = [adapter['name'] for adapter in adapters
+                  if adapter['eee_on']]
+            ok = has_rule and not on
+            check('eee', 'USB Ethernet power saving',
+                  'ok' if ok else 'todo',
+                  'Energy Efficient Ethernet stays off on %s.' % ', '.join(
+                      adapter['name'] for adapter in adapters) if ok else
+                  'On for %s%s: RTL8153 adapters drop packets with it.' % (
+                      ', '.join(on) or 'adapters plugged in later',
+                      '' if has_rule else ', and nothing turns it off'))
+        if 'can' in tags:
+            ip = shutil.which('ip') or '/usr/sbin/ip'
+            allowed = sudoAllows([CAN_COMMANDS[0]]) and sudoAllows(
+                [ip] + CAN_COMMANDS[1].split())
+            check('can-sudo', 'CAN without a password',
+                  'ok' if allowed else 'todo',
+                  'run.sh --canbus can bring up CAN.' if allowed else
+                  'sudo asks for a password for slcand / ip link, so '
+                  'run.sh --canbus fails when started from the orchestrator.')
+        if 'sharing' in tags or options.get('is_local'):
+            helper_hash = fileHash(SHARE_HELPER_PATH)
+            current = helper_hash and helper_hash == options.get(
+                'share_helper_hash') and shareSudoAllowed(helper_hash)
+            check('sharing', 'Internet sharing helper',
+                  'ok' if current else ('todo' if 'sharing' in tags
+                                        else 'optional'),
+                  'Installed: sharing starts without a password.' if current
+                  else 'Out of date.' if helper_hash else
+                  'Not installed (needed to share internet over Ethernet).')
+    else:
+        vm_path = options.get('csm_vm_path')
+        if vm_path:
+            script = os.path.join(os.path.expanduser(vm_path), 'run-vm.sh')
+            text = readText(script)
+            if text is None:
+                check('csm-vm', 'csm-vm', 'todo',
+                      'No run-vm.sh in %s.' % vm_path)
+            else:
+                current = '--overlay' in text and 'SERIAL_SOCKET' in text
+                check('csm-vm', 'csm-vm run-vm.sh',
+                      'ok' if current else 'todo',
+                      'Supports --overlay and the serial console.' if current
+                      else 'An older run-vm.sh: starting the VM from the '
+                      'orchestrator can stop at a question, and there is no '
+                      'serial console.')
+            tools = [path for path in VM_COMMANDS if not os.path.exists(path)]
+            check('vm-tools', 'QEMU and socat', 'ok' if not tools else 'todo',
+                  'Installed with Homebrew.' if not tools else
+                  'Missing %s (brew install qemu socat).' % ', '.join(tools))
+            allowed = all(sudoAllows([path]) for path in VM_COMMANDS)
+            check('vm-sudo', 'VM control without a password',
+                  'ok' if allowed else 'todo',
+                  'run-vm.sh can start and stop the VM.' if allowed else
+                  'sudo asks for a password for QEMU / socat, so the VM '
+                  'can\'t be started from the orchestrator.')
+    if options.get('workspace'):
+        distros = installedRosDistros()
+        check('ros', 'ROS 2', 'ok' if distros else 'todo',
+              'Installed: %s.' % ', '.join(distros) if distros else
+              'No ROS under /opt/ros: install it to build the workspace.')
+        root = os.path.expanduser(options['workspace'])
+        built = os.path.exists(os.path.join(root, 'install', 'setup.sh'))
+        exists = os.path.isdir(os.path.join(root, 'src'))
+        check('workspace', 'Workspace', 'ok' if built else 'todo',
+              '%s is built.' % options['workspace'] if built else
+              '%s %s: deploy and build it from the Deploy page.' % (
+                  options['workspace'],
+                  'is not built' if exists else 'does not exist'))
+    return checks
+
+
+
+# --- Surveying a new machine ----------------------------------------------------
+
+# What the add-machine wizard can prefill: workspaces and csm-vm folders near
+# the home directory, and VMs this machine hosts (seen on its host-only
+# bridge).
+
+def homeRelative(path):
+    home = os.path.expanduser('~')
+    relative = os.path.relpath(path, home)
+    return '~' if relative == '.' else '~/' + relative
+
+
+def findWorkspaces():
+    home = os.path.expanduser('~')
+    found = []
+    for pattern in ('*/src/build.sh', '*/*/src/build.sh'):
+        for path in sorted(glob.glob(os.path.join(home, pattern))):
+            workspace = os.path.dirname(os.path.dirname(path))
+            if os.path.isfile(os.path.join(workspace, 'src', 'run.sh')):
+                found.append(homeRelative(workspace))
+    return list(dict.fromkeys(found))
+
+
+def findCsmVm():
+    home = os.path.expanduser('~')
+    found = []
+    for pattern in ('*/run-vm.sh', '*/*/run-vm.sh'):
+        for path in sorted(glob.glob(os.path.join(home, pattern))):
+            text = readText(path) or ''
+            found.append({'path': homeRelative(os.path.dirname(path)),
+                          'has_overlay_option': '--overlay' in text})
+    return found
+
+
+def vmGuests(interfaces):
+    """Addresses seen on this machine's bridge interfaces (e.g. the
+    host-only link to a csm-vm VM), other than its own."""
+    bridges = []
+    own = set()
+    for interface in interfaces:
+        for cidr in interface.get('ipv4') or []:
+            address = ipaddress.ip_interface(cidr)
+            own.add(str(address.ip))
+            if interface['kind'] == 'bridge':
+                bridges.append((interface['name'], address.network))
+    guests = []
+    for address, mac in neighbourTable().items():
+        ip = ipaddress.ip_address(address)
+        for name, network in bridges:
+            if ip in network and address not in own \
+                    and ip != network.broadcast_address:
+                guests.append({'address': address, 'mac': mac,
+                               'interface': name})
+    return guests
+
+
+def machineSurvey(interfaces):
+    return {
+        'workspaces': findWorkspaces(),
+        'ros_distros': installedRosDistros(),
+        'csm_vm': findCsmVm(),
+        'vm_guests': vmGuests(interfaces),
+    }
+
+
+
 # --- Internet sharing ---------------------------------------------------------
 
 # Sharing this machine's internet over an Ethernet port goes through a small
@@ -918,13 +1129,18 @@ async def tcpProbe(host, port, timeout_s):
     return 'open', elapsed_ms
 
 
+def normalMac(mac):
+    '''aa:b:3:dd:e:ff -> aa:0b:03:dd:0e:ff (macOS's arp drops zeros).'''
+    return ':'.join(part.zfill(2) for part in mac.lower().split(':'))
+
+
 def neighbourTable():
     '''{ip: mac} from the ARP / neighbour table.'''
     table = {}
     if IS_MACOS:
         output = runCommand(['arp', '-an']) or ''
         for ip, mac in re.findall(r'\(([\d.]+)\) at ([0-9a-f:]+)', output):
-            table[ip] = mac
+            table[ip] = normalMac(mac)
     else:
         output = runCommand(['ip', 'neigh', 'show']) or ''
         for ip, mac in re.findall(r'^([\d.]+) .*lladdr ([0-9a-f:]+)', output,
@@ -970,6 +1186,12 @@ async def scanNetwork(cidr, ports, timeout_s):
         host['rtt_ms'] = min(host['rtt_ms'], elapsed_ms)
     neighbours = await asyncio.get_running_loop().run_in_executor(
         None, neighbourTable)
+    # Hosts that answered ARP but none of the ports (e.g. a firewall that
+    # drops everything) were still there.
+    for address, mac in neighbours.items():
+        if address not in hosts and ipaddress.ip_address(address) in network:
+            hosts[address] = {'address': address, 'ports': {},
+                              'rtt_ms': None, 'arp_only': True}
     names = await asyncio.gather(*(lookupName(address) for address in hosts))
     for host, name in zip(hosts.values(), names):
         host['name'] = name
@@ -1843,6 +2065,8 @@ class Daemon:
             'net.scan': self.methodNetScan,
             'net.neighbours': self.methodNetNeighbours,
             'share.status': self.methodShareStatus,
+            'machine.survey': self.methodMachineSurvey,
+            'setup.check': self.methodSetupCheck,
             'share.up': self.methodShareUp,
             'share.down': self.methodShareDown,
             'bags.list': self.methodBagsList,
@@ -1990,6 +2214,14 @@ class Daemon:
         ports = [int(port) for port in params.get('ports') or [22]]
         return await scanNetwork(params['cidr'], ports,
                                  float(params.get('timeout_s', 0.6)))
+
+    async def methodSetupCheck(self, session, params):
+        return {'checks': await self.inThread(setupChecks, params),
+                'user': getpass.getuser()}
+
+    async def methodMachineSurvey(self, session, params):
+        stats = await self.currentStats()
+        return await self.inThread(machineSurvey, stats['interfaces'])
 
     async def methodShareStatus(self, session, params):
         return await self.inThread(shareStatus, params.get('expected_hash'))

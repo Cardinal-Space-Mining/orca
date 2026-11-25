@@ -48,10 +48,10 @@ class TerminalStore {
         for (const listener of this.listeners) listener();
     }
 
-    async open(machineId, kind = 'shell') {
+    async open(machineId, kind = 'shell', extra = {}) {
         const opened = await postJson(
             `/api/machines/${encodeURIComponent(machineId)}/terminals`,
-            { kind, cols: 120, rows: 30 });
+            { ...extra, kind, cols: 120, rows: 30 });
         const entry = {
             key: this.key(machineId, opened.terminal_id),
             machineId, terminalId: opened.terminal_id, title: opened.title,
@@ -149,8 +149,10 @@ class TerminalStore {
 export const terminalStore = new TerminalStore();
 window.addEventListener('pagehide', () => terminalStore.closeAllOnUnload());
 
-export function openTerminal(machineId, kind = 'shell') {
-    return terminalStore.open(machineId, kind)
+// `extra` goes to the server with the request (e.g. what to install a key
+// on, for kind "install-key").
+export function openTerminal(machineId, kind = 'shell', extra = {}) {
+    return terminalStore.open(machineId, kind, extra)
         .catch((failure) => window.alert(failure.message));
 }
 

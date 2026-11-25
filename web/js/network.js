@@ -6,6 +6,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { html, formatDuration, postJson, StatusDot } from './common.js';
+import { startAddMachine } from './addmachine.js';
 import { SharingPanel } from './sharing.js';
 import { trafficStore } from './traffic.js';
 
@@ -594,7 +595,7 @@ function ToolsPanel({ state }) {
         try {
             const answer = await postJson(`/api/machines/${encodeURIComponent(
                 source.machine.id)}/net/${tool}`, body);
-            setResult({ tool, answer });
+            setResult({ tool, answer, machine: source.machine });
         } catch (failure) {
             setResult({ tool, error: failure.message });
         }
@@ -719,7 +720,13 @@ function ToolResult({ result, knownAddresses }) {
                             </td>`;
                     })}
                     <td>${knownAddresses[host.address]
-                        || html`<span class="faint">–</span>`}</td>
+                        || html`<button class="button small" onClick=${() =>
+                            startAddMachine({
+                                address: host.address, hostname: host.name,
+                                mac: host.mac,
+                                via: result.machine.is_local ? null
+                                    : result.machine.id })}>Add</button>`}
+                        </td>
                 </tr>`)}</tbody>
             </table>
         </div>`;

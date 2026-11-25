@@ -5,7 +5,7 @@
 import { useState } from 'preact/hooks';
 import { html, formatAgo, formatDuration, postJson, StatusDot }
     from './common.js';
-import { addMachineDraft } from './inventory.js';
+import { startAddMachine } from './addmachine.js';
 import { openTerminal } from './terminals.js';
 
 
@@ -78,7 +78,7 @@ function deviceSeen(device, now) {
     return device.state ? `seen (${device.state})` : 'seen';
 }
 
-function DeviceRow({ device, machinesById, now }) {
+function DeviceRow({ device, sharerId, machinesById, now }) {
     const owner = device.machine_id && machinesById[device.machine_id];
     return html`
         <tr>
@@ -92,9 +92,10 @@ function DeviceRow({ device, machinesById, now }) {
                     <${StatusDot} state=${owner.connection.state} />
                     ${owner.machine.label}</a>`
                 : html`<button class="button small" onClick=${() =>
-                    addMachineDraft({
-                        id: '', label: device.hostname || '',
-                        routes: [{ host: device.address }],
+                    startAddMachine({
+                        address: device.address, hostname: device.hostname,
+                        mac: device.mac,
+                        via: sharerId === 'local' ? null : sharerId,
                     })}>Add machine</button>`}</td>
         </tr>`;
 }
@@ -127,13 +128,15 @@ function SessionCard({ machineId, session, status, machinesById, now }) {
             <div class="share-head">
                 <span class="dot ${level}"></span>
                 <div>
-                    <b>Sharing on <span class="mono">${session.downstream}</span>
+                    <b>Sharing on${' '}<span class="mono">${
+                        session.downstream}</span>
                         </b>
                     <div class="faint">${health} · this machine is
                         <span class="mono">${` ${session.server}/${prefix}`}
                         </span> · internet through
                         <span class="mono">${` ${upstream || 'nothing'}`}</span>
-                        ${` · since ${formatAgo(session.started_s, now)}`}</div>
+                        ${` · since ${formatAgo(session.started_s,
+                            now)}`}</div>
                 </div>
                 <span class="spacer"></span>
                 <button class="button small danger" disabled=${isStopping}
@@ -148,14 +151,14 @@ function SessionCard({ machineId, session, status, machinesById, now }) {
                     <thead><tr><th>Device</th><th>Address</th><th>MAC</th>
                         <th>Seen</th><th>Machine</th></tr></thead>
                     <tbody>${devices.map((device) => html`<${DeviceRow}
-                        key=${device.mac} device=${device}
+                        key=${device.mac} device=${device} sharerId=${machineId}
                         machinesById=${machinesById} now=${now} />`)}</tbody>
                 </table>`}
         </div>`;
 }
 
 
-// --- Starting ------------------------------------------------------------------
+// --- Starting ----------------------------------------------------------------
 
 function portLabel(port) {
     const notes = [port.carrier ? 'cable in' : 'no cable'];
@@ -215,7 +218,8 @@ function StartForm({ machineId, status, isReady: ready }) {
                 <label class="field wide">
                     <span>Share over</span>
                     <select class="input" value=${downstream}
-                        onChange=${(event) => setDownstream(event.target.value)}>
+                        onChange=${(event) =>
+                            setDownstream(event.target.value)}>
                         ${ports.filter((port) => port.kind === 'ethernet')
                             .map((port) => html`<option value=${port.name}
                                 disabled=${port.is_default_route}>

@@ -445,6 +445,58 @@ function OfflineNotice({ machineId, connection, now }) {
             machineId=${machineId} route=${connection.unknown_host_key} />`}`;
 }
 
+// --- Setup checklist ---------------------------------------------------------
+
+const SETUP_MARKS = { ok: '✓', todo: '!', optional: '·' };
+
+function SetupSection({ machineId, setup }) {
+    const checks = (setup && setup.checks) || [];
+    const todo = checks.filter((check) => check.state === 'todo');
+    const [isOpen, setIsOpen] = useState(null);
+    const [isChecking, setIsChecking] = useState(false);
+    if (checks.length === 0) return null;
+    const open = isOpen === null ? todo.length > 0 : isOpen;
+    async function recheck() {
+        setIsChecking(true);
+        try {
+            await postJson(`/api/machines/${encodeURIComponent(machineId)}`
+                + '/setup/refresh');
+        } finally {
+            setIsChecking(false);
+        }
+    }
+    return html`
+        <div class="section-head">
+            <span>Setup</span>
+            <span class="pill ${todo.length ? 'warn' : 'good'}">${todo.length
+                ? `${todo.length} to do` : 'ready'}</span>
+            <span class="spacer"></span>
+            <button class="link-button" onClick=${() => setIsOpen(!open)}>
+                ${open ? 'Hide' : 'Show'}</button>
+        </div>
+        ${open && html`<ul class="setup-list">
+            ${checks.map((check) => html`<li class=${check.state}>
+                <span class="setup-mark">${SETUP_MARKS[check.state]}</span>
+                <span class="setup-text"><b>${check.title}</b>
+                    <small>${check.detail}</small></span>
+                ${check.state !== 'ok' && check.fix && (
+                    check.fix.kind === 'link'
+                    ? html`<a class="button small" href=${check.fix.href}>
+                        ${check.fix.label}</a>`
+                    : html`<button class="button small" onClick=${() =>
+                        openTerminal(machineId, 'setup',
+                            { check: check.id })}>Fix</button>`)}
+            </li>`)}
+            <li class="setup-footer">
+                <span class="faint">Fixes run in a terminal on the machine,
+                    where sudo asks for the password.</span>
+                <button class="link-button" disabled=${isChecking}
+                    onClick=${recheck}>${isChecking ? 'Checking…'
+                        : 'Check again'}</button>
+            </li>
+        </ul>`}`;
+}
+
 // Where an offline machine was last seen: these addresses are tried along
 // with the inventory's routes.
 function LastSeen({ addresses, now }) {
@@ -509,7 +561,9 @@ function CardBody({ entry, guestEntry, reference, now }) {
                 now=${now} />`}
             ${machine.vm && isOnline && html`<${VmSection}
                 machineId=${machine.id} vm=${vm} vmRun=${entry.vmRun}
-                guestLabel=${guestEntry && guestEntry.machine.label} />`}`;
+                guestLabel=${guestEntry && guestEntry.machine.label} />`}
+            ${isOnline && html`<${SetupSection} machineId=${machine.id}
+                setup=${entry.setup} />`}`;
 }
 
 
@@ -591,8 +645,9 @@ export function MachinesView({ state, now }) {
             <div>
                 <h1>Machines</h1>
                 <p>Every machine in the inventory, live over SSH.${' '}
-                    <a class="link-button" href="#/machines/edit">
-                        Edit machines</a></p>
+                    <a class="link-button" href="#/machines/add">
+                        Add a machine</a>${' · '}<a class="link-button"
+                        href="#/machines/edit">Edit machines</a></p>
             </div>
             <${Summary} machines=${state.machines} />
         </div>

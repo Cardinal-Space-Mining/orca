@@ -1289,3 +1289,95 @@ body.is-resizing .terminal-view { opacity: 0.85; }
     text-decoration: none;
 }
 .machine-link:hover { text-decoration: underline; }
+
+/* Add-machine wizard. */
+.wizard-steps {
+    display: flex;
+    gap: 6px;
+    list-style: none;
+    padding: 0;
+    margin: 0 0 16px;
+}
+.wizard-steps li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px 6px 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-faint);
+    font-size: 13px;
+}
+.wizard-steps li span {
+    display: inline-grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--border);
+    font-size: 12px;
+}
+.wizard-steps li.active { color: var(--text); border-color: var(--accent); }
+.wizard-steps li.active span { background: var(--accent); color: #fff; }
+.wizard-steps li.done span { background: var(--good-soft); color: var(--good); }
+.segmented {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 14px;
+}
+.segmented button {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    padding: 8px 14px;
+    font: inherit;
+    cursor: pointer;
+}
+.segmented button + button { border-left: 1px solid var(--border); }
+.segmented button.active { background: var(--accent-soft, rgba(200, 32, 47, 0.18));
+    color: var(--text); }
+.fingerprints { font-size: 12px; margin: 8px 0 0; white-space: pre-wrap; }
+.compare-box.key-check { margin: 12px 0; }
+.review-grid {
+    display: grid;
+    grid-template-columns: minmax(260px, 1fr) 2fr;
+    gap: 28px;
+}
+.review-grid h3 { margin: 0 0 4px; }
+.table.compact td { padding: 4px 8px; }
+.plain-list { list-style: none; padding: 0; margin: 0 0 10px; font-size: 13px; }
+.plain-list li { padding: 2px 0; }
+.field-error { color: var(--bad); font-style: normal; text-transform: none;
+    letter-spacing: 0; margin-left: 6px; }
+
+/* Setup checklist (machine cards). */
+.setup-list { list-style: none; padding: 0; margin: 0 0 6px; }
+.setup-list li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    border-top: 1px solid var(--border);
+}
+.setup-mark {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 700;
+}
+.setup-list li.ok .setup-mark { background: var(--good-soft); color: var(--good); }
+.setup-list li.todo .setup-mark { background: rgba(245, 166, 35, 0.16);
+    color: var(--warn); }
+.setup-list li.optional .setup-mark { background: var(--border);
+    color: var(--text-faint); }
+.setup-text { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.setup-text small { color: var(--text-muted); font-size: 12px; }
+.setup-footer { justify-content: space-between; font-size: 12px; }
+.setup-footer .link-button { white-space: nowrap; }
+.check-row { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 4px 0 10px; }

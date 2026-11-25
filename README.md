@@ -20,7 +20,7 @@ CAN permissions): [docs/machine-setup.md](docs/machine-setup.md).
 
 | Page | What it does |
 |---|---|
-| Machines | Every machine: connection, load, network (incl. Wi-Fi channel), whether it runs the same code as yours. A terminal on any machine; the VM on a mac host: start, shut down, restart, force stop, commit the overlay, back up, restore, and its serial console. **Edit machines** changes the inventory files in the app. |
+| Machines | Every machine: connection, load, network (incl. Wi-Fi channel), where an offline machine was last seen, whether it runs the same code as yours. A terminal on any machine; the VM on a mac host: start, shut down, restart, force stop, commit the overlay, back up, restore, and its serial console. **Add a machine** finds a new machine (scan, shared port or address), sets up SSH access and writes its entry; **Edit machines** changes the inventory files in the app. |
 | Launch | Pick a scenario, assign machines to its roles, check the exact commands, launch. |
 | Runs | Everything launched, deployed or pulled, with live output per process (filter by text, level or node), stop all or one. |
 | Deploy | Push this workspace's `src/` to other machines and build there; compare first to see exactly what changes. |
@@ -30,6 +30,24 @@ CAN permissions): [docs/machine-setup.md](docs/machine-setup.md).
 | Config | Browse every action and preset of `lance/config`, what a preset inherits and enables, and try `key:=value` arguments without launching. |
 
 ## Machines
+
+**Add a machine** (on the Machines page) finds a new machine and writes its
+entry for you:
+
+1. **Find it**: scan a network from any connected machine (devices are listed
+   with name, MAC and whether SSH is open; known machines are marked), pick a
+   device plugged into a shared port (see "Sharing internet over Ethernet";
+   it can start sharing right there), or type an address. A VM behind its mac
+   (host-only network) is reached through the mac.
+2. **Connect**: choose an id and the user on it, compare the host key's
+   fingerprints with the machine's own and trust them (it warns when another
+   machine has the same key, as cloned VMs do), and install your SSH key if
+   the machine doesn't accept it yet (a terminal asks for the password once).
+3. **Review**: it connects once and fills in the entry from what it finds: its
+   addresses (the reachable ones), the workspace, csm-vm on a mac, and the
+   lance config constants that hold its address. Save it to the team file or
+   your own; it connects right away. A mac that hosts a VM offers to add the
+   VM next.
 
 The orchestrator reads two inventory files and merges them (the second overrides
 entries of the first by `id`):
@@ -82,6 +100,23 @@ host and its VM:
 - `workspace` is a colcon workspace whose repo is `<workspace>/src`; the
   orchestrator shows its commit and whether it matches yours.
 - `vm` marks a mac that runs a csm-vm VM.
+
+### Setup checklist
+
+Each machine card has a **Setup** list of the one-time setup that machine
+needs, checked without sudo every few minutes: lingering, rsync, the mDNS name
+(avahi), Energy Efficient Ethernet on Realtek USB adapters, ROS and the
+workspace; on a mac VM host, csm-vm's `run-vm.sh` version, QEMU and socat, and
+passwordless sudo for them. Two roles in the inventory (`"setup": [...]`, also
+checkboxes in the editor and the add-machine wizard) add items: `"can"` for a
+robot computer (passwordless sudo for CAN bring-up) and `"sharing"` for a
+machine that shares its internet (the sharing helper).
+
+**Fix** writes a short script to the machine and runs it in a terminal there,
+showing each command as it runs; sudo asks for the password in that terminal.
+The list re-checks when the terminal closes. The sudoers rules it installs are
+the narrow ones from [docs/machine-setup.md](docs/machine-setup.md), checked
+with `visudo -c` before they're installed.
 
 ### Addresses change; machines are found anyway
 
@@ -318,9 +353,9 @@ temporary directory.
 | 4 | Network tools, bandwidth budget, competition mode; resizable, dockable terminals | done |
 | 5 | Addressing: machines found by host key, remembered addresses, neighbour matching and discovery; live addresses in launches; a test suite | done |
 | 6 | Internet sharing over Ethernet (replaces netshare), with devices on the port matched to machines | done |
-| 7 | Add-machine wizard with discovery | next |
-| 8 | Setup checklist per machine (SSH key, sudoers, lingering, EEE...) | |
-| 9 | Configurability: edit scenarios, launch-config presets (with descriptions) and orchestrator settings in the app | |
+| 7 | Add-machine wizard: discovery, host key and SSH key setup, entry from what the machine reports | done |
+| 8 | Setup checklist per machine: checked without sudo, fixed by scripts run in a terminal there | done |
+| 9 | Configurability: edit scenarios, launch-config presets (with descriptions) and orchestrator settings in the app | next |
 | 10 | Native macOS processes | |
 | later | Network map on the machines page (adapters, links with live traffic, discovery in place); icons throughout | |
 

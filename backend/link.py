@@ -11,15 +11,14 @@ from __future__ import annotations
 import asyncio
 import collections
 import json
-import os
 import sys
 import time
 from typing import Optional
 
 from .budget import MONITOR_PROCESS_ID
 from .inventory import Machine, Route
-from .ssh import (ATTACH_COMMAND, DEPLOY_COMMAND, keyscanCommand,
-                  knownHostsName, sshCommand)
+from .ssh import (ATTACH_COMMAND, DEPLOY_COMMAND, scanHostKeys,
+                  sshCommand, trustHostKeys)
 
 
 FIRST_EVENT_TIMEOUT_S = 20.0
@@ -32,6 +31,8 @@ STATS_INTERVAL_S = (2.0, 10.0)
 PING_PERIOD_S = (5.0, 15.0)
 VM_PERIOD_S = (5.0, 15.0)
 SHARING_PERIOD_S = (5.0, 15.0)
+# Setup changes rarely; fixes re-check when their terminal closes.
+SETUP_PERIOD_S = (300.0, 1800.0)
 WORKSPACE_PERIOD_S = (30.0, 120.0)
 STREAM_LIMIT_BYTES = 16 * 1024 * 1024
 ROUTE_STAGGER_S = 0.4
@@ -269,7 +270,10 @@ class MachineLink:
             'workspace': None,
             'vm': None,
             'sharing': None,
+            'setup': None,
         }
+        # Terminals running a setup fix: re-check when they end.
+        self.setup_terminals = set()
 
     # --- State ---
 
@@ -553,22 +557,7 @@ class MachineLink:
         route = self.unknownKeyRoute()
         if route is None:
             raise ValueError('no route is waiting for a host key')
-        process = await asyncio.create_subprocess_exec(
-            *keyscanCommand(route, self.orchestrator.jumpRouteFor),
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        output, _ = await asyncio.wait_for(process.communicate(), 20.0)
-        keys = [line for line in output.decode().splitlines()
-                if line and not line.startswith('#')]
-        if not keys:
-            raise ValueError('could not read host keys from ' + route.host)
-        fingerprint = await asyncio.create_subprocess_exec(
-            'ssh-keygen', '-l', '-f', '-', stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE)
-        fingerprints, _ = await fingerprint.communicate(
-            '\n'.join(keys).encode() + b'\n')
-        return {'route': route.describe(), 'name': knownHostsName(route),
-                'keys': keys,
-                'fingerprints': fingerprints.decode().splitlines()}
+        return await scanHostKeys(route, self.orchestrator.jumpRouteFor)
 
     async def trustHostKey(self, expected_fingerprints: list) -> None:
         """Add the scanned keys to ~/.ssh/known_hosts under the route's name,
@@ -576,15 +565,7 @@ class MachineLink:
         scanned = await self.scanHostKey()
         if sorted(scanned['fingerprints']) != sorted(expected_fingerprints):
             raise ValueError('the host keys changed since they were shown')
-        name = scanned['name']
-        lines = []
-        for key in scanned['keys']:
-            _, key_type, key_data = key.split(None, 2)
-            lines.append('%s %s %s\n' % (name, key_type, key_data))
-        known_hosts = os.path.expanduser('~/.ssh/known_hosts')
-        os.makedirs(os.path.dirname(known_hosts), mode=0o700, exist_ok=True)
-        with open(known_hosts, 'a') as file:
-            file.writelines(lines)
+        trustHostKeys(scanned['name'], scanned['keys'])
         self.orchestrator.finder.forgetKnownHosts()
         self.requestReconnect()
 
@@ -636,7 +617,8 @@ class MachineLink:
 
     def pollTasks(self) -> list:
         tasks = [self.poll(PING_PERIOD_S, self.measureLatency),
-                 self.poll(SHARING_PERIOD_S, self.refreshSharing)]
+                 self.poll(SHARING_PERIOD_S, self.refreshSharing),
+                 self.poll(SETUP_PERIOD_S, self.refreshSetup)]
         if not self.machine.is_local:
             tasks.append(self.preferEarlierRoutes())
         if self.machine.workspace:
@@ -725,6 +707,9 @@ class MachineLink:
             'workspace.status', {'path': self.machine.workspace})
         self.publish()
 
+    async def refreshSetup(self):
+        await self.orchestrator.setup.refresh(self)
+
     async def refreshSharing(self):
         await self.orchestrator.sharing.refresh(self)
 
@@ -753,8 +738,18 @@ class MachineLink:
                                       dict(data, machine_id=self.machine.id))
         elif name == 'terminal.exit':
             self.terminals.discard(data['terminal_id'])
+            if data['terminal_id'] in self.setup_terminals:
+                self.setup_terminals.discard(data['terminal_id'])
+                asyncio.ensure_future(self.refreshAfterFix())
             self.orchestrator.publish('terminal.exit',
                                       dict(data, machine_id=self.machine.id))
+
+    async def refreshAfterFix(self):
+        try:
+            await self.refreshSetup()
+            await self.refreshSharing()
+        except (AgentError, ConnectionError, asyncio.TimeoutError):
+            pass
 
     def addInterfaceRates(self, stats: dict):
         '''Bits per second per interface, from the byte counters of this and

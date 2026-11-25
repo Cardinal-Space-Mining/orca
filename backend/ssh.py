@@ -12,6 +12,8 @@ and a missing key would leave it waiting for a password nobody can type.
 
 from __future__ import annotations
 
+import asyncio
+import os
 import shlex
 
 from .inventory import Route
@@ -84,3 +86,55 @@ def knownHostsName(route: Route) -> str:
     if route.port and route.port != 22:
         return '[%s]:%d' % (name, route.port)
     return name
+
+
+# --- Host keys ---------------------------------------------------------------
+
+
+KNOWN_HOSTS_PATH = os.path.expanduser('~/.ssh/known_hosts')
+
+
+async def scanHostKeys(route: Route, jumpRouteFor) -> dict:
+    """A route's host keys and their fingerprints, for a person to compare
+    before trusting them. Raises ValueError if nothing answers."""
+    process = await asyncio.create_subprocess_exec(
+        *keyscanCommand(route, jumpRouteFor),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    output, _ = await asyncio.wait_for(process.communicate(), 20.0)
+    keys = [line for line in output.decode().splitlines()
+            if line and not line.startswith('#')]
+    if not keys:
+        raise ValueError('could not read host keys from ' + route.host)
+    fingerprint = await asyncio.create_subprocess_exec(
+        'ssh-keygen', '-l', '-f', '-', stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE)
+    fingerprints, _ = await fingerprint.communicate(
+        '\n'.join(keys).encode() + b'\n')
+    return {'route': route.describe(), 'name': knownHostsName(route),
+            'keys': keys, 'fingerprints': fingerprints.decode().splitlines()}
+
+
+def keyData(key_line: str) -> str:
+    """The key itself from a keyscan or known_hosts line."""
+    return key_line.split()[-1]
+
+
+def trustHostKeys(name: str, keys: list) -> None:
+    """Add scanned keys to ~/.ssh/known_hosts under `name`."""
+    lines = []
+    for key in keys:
+        _, key_type, key_data = key.split(None, 2)
+        lines.append('%s %s %s\n' % (name, key_type, key_data))
+    os.makedirs(os.path.dirname(KNOWN_HOSTS_PATH), mode=0o700, exist_ok=True)
+    with open(KNOWN_HOSTS_PATH, 'a') as file:
+        file.writelines(lines)
+
+
+async def knownKeys(name: str) -> set:
+    """Key data trusted under a known_hosts name (hashed entries too)."""
+    process = await asyncio.create_subprocess_exec(
+        'ssh-keygen', '-F', name, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL)
+    output, _ = await process.communicate()
+    return {keyData(line) for line in output.decode().splitlines()
+            if line and not line.startswith('#')}

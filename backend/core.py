@@ -17,10 +17,12 @@ from .inventory import (Route, inventoryScopes, loadInventory,
 from .lance_config import ConfigError, LanceConfig
 from .budget import MONITOR_PROCESS_ID, BudgetTracker
 from .deploy import Deployer
+from .discovery import Discovery
 from .link import MachineLink
 from .runs import PlanError, Planner, Run, expandHome, newRunId
 from .settings import loadSettings, mergeDefaults, saveSettings
 from .scenarios import loadScenarios
+from .setup import Setup
 from .sharing import Sharing
 from .vm import VmController
 
@@ -53,6 +55,8 @@ class Orchestrator:
         self.budget = BudgetTracker(self)
         self.finder = Finder(self)
         self.sharing = Sharing(self)
+        self.discovery = Discovery(self)
+        self.setup = Setup(self)
         self.lance_config = None
         self.lance_config_error = None
 
@@ -169,6 +173,8 @@ class Orchestrator:
         for link in list(self.links):
             if link.machine.id not in new_ids:
                 await link.stop()
+                self.finder.book.forget(link.machine.id)
+                self.finder.book.saveSoon(asyncio.get_running_loop())
                 self.publish('machine.removed', {'id': link.machine.id})
         links = []
         for machine in machines:
@@ -274,7 +280,7 @@ class Orchestrator:
     # --- Terminals ---
 
     async def openTerminal(self, machine_id: str, kind: str, columns: int,
-                           rows: int) -> dict:
+                           rows: int, options: Optional[dict] = None) -> dict:
         link = self.link(machine_id)
         params = {'cols': columns, 'rows': rows}
         if kind == 'serial':
@@ -285,11 +291,21 @@ class Orchestrator:
         elif kind == 'share-install':
             params['argv'] = await self.sharing.installCommand(machine_id)
             title = 'Install sharing helper · %s' % link.machine.label
+        elif kind == 'setup':
+            check_id = str((options or {}).get('check'))
+            params['argv'] = await self.setup.fixCommand(link, check_id)
+            title = 'Set up %s · %s' % (check_id, link.machine.label)
+        elif kind == 'install-key':
+            target = (options or {}).get('target') or {}
+            params['argv'] = self.discovery.keyCommand(target)
+            title = 'Install SSH key · %s' % target.get('address')
         else:
             params['cwd'] = link.machine.workspace or '~'
             title = 'Shell · %s' % link.machine.label
         opened = await link.call('terminal.open', params)
         link.terminals.add(opened['terminal_id'])
+        if kind in ('setup', 'share-install'):
+            link.setup_terminals.add(opened['terminal_id'])
         return {'machine_id': machine_id, 'terminal_id':
                 opened['terminal_id'], 'title': title, 'kind': kind}
 

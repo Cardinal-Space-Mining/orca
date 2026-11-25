@@ -7,6 +7,20 @@ the [README](../README.md#machines).
 
 ## Every machine
 
+After that, the machine card's **Setup** list checks everything below and
+has a **Fix** button for most of it (a script run in a terminal on the
+machine, where you type the sudo password). This page is the manual version.
+
+**Machines → Add a machine** does steps 1 and 3 for a new machine: it finds
+the machine (network scan, a device plugged into a shared port, or an
+address), shows its host key to compare and trusts it, installs your SSH key
+(a terminal asks for the account's password once), connects, and proposes
+the inventory entry. The steps below are what it does, for doing them by hand
+or on another operator laptop.
+
+The machine needs an SSH server: on Ubuntu `sudo apt install openssh-server`,
+on macOS System Settings → General → Sharing → Remote Login.
+
 1. **SSH key access from each operator laptop.** The orchestrator never types
    passwords:
    ```bash

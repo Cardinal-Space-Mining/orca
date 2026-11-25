@@ -13,6 +13,7 @@ import { DeployView } from './js/deploy.js';
 import { BagsView } from './js/bags.js';
 import { LogsView } from './js/logs.js';
 import { InventoryView } from './js/inventory.js';
+import { AddMachineView } from './js/addmachine.js';
 import { TerminalDock } from './js/terminals.js';
 import { NetworkView } from './js/network.js';
 
@@ -115,6 +116,9 @@ function Page({ state, location, navigate, now }) {
             return html`<${ConfigView} />`;
         default:
             if (location.detail === 'edit') return html`<${InventoryView} />`;
+            if (location.detail === 'add') {
+                return html`<${AddMachineView} state=${state} />`;
+            }
             return html`<${MachinesView} state=${state} now=${now} />`;
     }
 }

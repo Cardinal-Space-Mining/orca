@@ -36,7 +36,10 @@ File format:
                 "config_addresses": {
                     "ip.net1.mac_vm_eth": "ethernet",
                     "ip.net1.mac_vm_wifi": "wifi"
-                }
+                },
+                // Extra setup checklist items: "can" (robot computer),
+                // "sharing" (shares its internet, e.g. a driver station).
+                "setup": ["can"]
             },
             {
                 "id": "robot-mac",
@@ -121,6 +124,8 @@ class Machine:
     host_key_alias: Optional[str] = None
     # lance config constant ("ip.net1.mac_vm_eth") -> interface kind
     config_addresses: dict = field(default_factory=dict)
+    # What else it needs set up (setup.py): "can", "sharing"
+    setup: list = field(default_factory=list)
 
     def identity(self) -> Optional[str]:
         '''The known_hosts name that proves a connection reached this
@@ -145,6 +150,7 @@ class Machine:
             'routes': [route.describe() for route in self.routes],
             'source': self.source,
             'config_addresses': self.config_addresses,
+            'setup': self.setup,
         }
 
 
@@ -154,6 +160,7 @@ class Machine:
 
 
 CONFIG_ADDRESS_KINDS = ('ethernet', 'wifi')
+SETUP_TAGS = ('can', 'sharing')
 
 
 def parseRoute(entry: dict, machine_id: str, defaults: dict) -> Route:
@@ -165,6 +172,16 @@ def parseRoute(entry: dict, machine_id: str, defaults: dict) -> Route:
                  port=entry.get('port'), via=entry.get('via'),
                  host_key_alias=entry.get('host_key_alias')
                  or defaults.get('host_key_alias'))
+
+
+def parseSetup(entry: dict, machine_id: str) -> list:
+    tags = entry.get('setup') or []
+    unknown = [tag for tag in tags if tag not in SETUP_TAGS]
+    if unknown:
+        raise InventoryError("machine '%s': unknown setup %s (known: %s)"
+                             % (machine_id, ', '.join(unknown),
+                                ', '.join(SETUP_TAGS)))
+    return list(tags)
 
 
 def parseConfigAddresses(entry: dict, machine_id: str) -> dict:
@@ -198,6 +215,7 @@ def parseMachine(entry: dict, source: str) -> Machine:
         user=entry.get('user'),
         host_key_alias=entry.get('host_key_alias'),
         config_addresses=parseConfigAddresses(entry, machine_id),
+        setup=parseSetup(entry, machine_id),
     )
 
 

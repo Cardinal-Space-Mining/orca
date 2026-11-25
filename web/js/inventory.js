@@ -18,14 +18,11 @@ const SCOPES = [
 
 const EMPTY_ROUTE = { host: '', user: '' };
 
-// A machine to add, prefilled elsewhere (e.g. a device on a shared port);
-// the editor opens with it as a new entry in "My machines".
-let pendingDraft = null;
-
-export function addMachineDraft(draft) {
-    pendingDraft = draft;
-    window.location.hash = '#/machines/edit';
-}
+// Roles that add items to a machine's setup checklist.
+export const SETUP_TAGS = [
+    ['can', 'Robot computer (brings up CAN)'],
+    ['sharing', 'Shares its internet over Ethernet (driver station)'],
+];
 
 function cleanEntry(entry) {
     // Drop empty optional fields so the file stays tidy.
@@ -218,6 +215,15 @@ function MachineForm({ entry, ids, onChange, onRemove }) {
                                 + '.orchestrator'}
                             onChange=${set('host_key_alias')} />
                     </div>
+                    <div class="check-row">${SETUP_TAGS.map(([tag, label]) =>
+                        html`<label class="check"><input type="checkbox"
+                            checked=${(entry.setup || []).includes(tag)}
+                            onChange=${(event) => {
+                                const tags = (entry.setup || []).filter(
+                                    (other) => other !== tag);
+                                if (event.target.checked) tags.push(tag);
+                                set('setup')(tags.length ? tags : null);
+                            }} />${label}</label>`)}</div>
                     <label class="check">
                         <input type="checkbox" checked=${!!entry.vm}
                             onChange=${(event) => set('vm')(event.target.checked
@@ -280,9 +286,8 @@ function MachineForm({ entry, ids, onChange, onRemove }) {
 
 // --- One file ----------------------------------------------------------------
 
-function InventoryFile({ scope, file, allIds, notice, draft, onSaved }) {
-    const [entries, setEntries] = useState(
-        draft ? [...file.machines, draft] : file.machines);
+function InventoryFile({ scope, file, allIds, notice, onSaved }) {
+    const [entries, setEntries] = useState(file.machines);
     const [isJson, setIsJson] = useState(false);
     const [jsonText, setJsonText] = useState('');
     const [message, setMessage] = useState(notice);
@@ -374,7 +379,9 @@ function InventoryFile({ scope, file, allIds, notice, draft, onSaved }) {
                         <button class="button" onClick=${() => setEntries([
                             ...entries, { id: '', label: '',
                                 routes: [{ ...EMPTY_ROUTE }] }])}>
-                            Add machine</button>
+                            Add by hand</button>
+                        <a class="button primary" href="#/machines/add">
+                            Find and add a machine</a>
                     </div>`}
         </section>`;
 }
@@ -384,12 +391,7 @@ function InventoryFile({ scope, file, allIds, notice, draft, onSaved }) {
 
 export function InventoryView() {
     const [inventory, setInventory] = useState(null);
-    const [draft] = useState(() => {
-        const taken = pendingDraft;
-        pendingDraft = null;
-        return taken;
-    });
-    const [scopeId, setScopeId] = useState(draft ? 'user' : 'project');
+    const [scopeId, setScopeId] = useState('project');
     const [error, setError] = useState(null);
     const [version, setVersion] = useState(0);
     const [notice, setNotice] = useState(null);
@@ -421,7 +423,6 @@ export function InventoryView() {
         </div>
         <${InventoryFile} key=${`${scope.id}-${version}`} scope=${scope}
             file=${inventory[scope.id]} allIds=${allIds} notice=${notice}
-            draft=${scope.id === 'user' && version === 0 ? draft : null}
             onSaved=${(message) => {
                 setNotice(message);
                 setVersion(version + 1);

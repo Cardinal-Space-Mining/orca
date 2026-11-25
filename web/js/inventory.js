@@ -18,6 +18,15 @@ const SCOPES = [
 
 const EMPTY_ROUTE = { host: '', user: '' };
 
+// A machine to add, prefilled elsewhere (e.g. a device on a shared port);
+// the editor opens with it as a new entry in "My machines".
+let pendingDraft = null;
+
+export function addMachineDraft(draft) {
+    pendingDraft = draft;
+    window.location.hash = '#/machines/edit';
+}
+
 function cleanEntry(entry) {
     // Drop empty optional fields so the file stays tidy.
     const cleaned = {};
@@ -271,8 +280,9 @@ function MachineForm({ entry, ids, onChange, onRemove }) {
 
 // --- One file ----------------------------------------------------------------
 
-function InventoryFile({ scope, file, allIds, notice, onSaved }) {
-    const [entries, setEntries] = useState(file.machines);
+function InventoryFile({ scope, file, allIds, notice, draft, onSaved }) {
+    const [entries, setEntries] = useState(
+        draft ? [...file.machines, draft] : file.machines);
     const [isJson, setIsJson] = useState(false);
     const [jsonText, setJsonText] = useState('');
     const [message, setMessage] = useState(notice);
@@ -374,7 +384,12 @@ function InventoryFile({ scope, file, allIds, notice, onSaved }) {
 
 export function InventoryView() {
     const [inventory, setInventory] = useState(null);
-    const [scopeId, setScopeId] = useState('project');
+    const [draft] = useState(() => {
+        const taken = pendingDraft;
+        pendingDraft = null;
+        return taken;
+    });
+    const [scopeId, setScopeId] = useState(draft ? 'user' : 'project');
     const [error, setError] = useState(null);
     const [version, setVersion] = useState(0);
     const [notice, setNotice] = useState(null);
@@ -406,6 +421,7 @@ export function InventoryView() {
         </div>
         <${InventoryFile} key=${`${scope.id}-${version}`} scope=${scope}
             file=${inventory[scope.id]} allIds=${allIds} notice=${notice}
+            draft=${scope.id === 'user' && version === 0 ? draft : null}
             onSaved=${(message) => {
                 setNotice(message);
                 setVersion(version + 1);

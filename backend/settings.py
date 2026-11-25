@@ -30,6 +30,9 @@ DEFAULTS = {
         'monitor_machine_id': None,
         'monitor_local_dds': True,
     },
+    # Last internet-sharing choices per machine id (downstream port,
+    # subnet...), offered again next time.
+    'sharing': {},
 }
 
 

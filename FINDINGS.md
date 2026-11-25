@@ -41,6 +41,18 @@ orchestrator avoids it; the underlying issue is still there).
 | V6 | `run-vm.sh` daemon/launchd modes | No serial console: the only way into a VM with broken networking was stopping it and restarting with `--term`. | fixed in csm-vm (uncommitted): serial port on `/tmp/qemu-serial.sock` |
 | V7 | `run-vm.sh` `MAC_BRIDGE`, `MAC_HOST`, `MAC_WIFI` | Hard-coded (52:54:00:12:34:56/57/58), so every VM started from csm-vm without its own config has the same MACs: the robot VM and the M2 VM most likely do. Two of them on one network would fight over the address, and MACs can't tell them apart (the orchestrator ignores MACs that more than one machine reported). Give each VM its own MACs in its csm-vm config. | open |
 
+## netshare
+
+Replaced by the orchestrator's internet sharing (README, "Sharing internet over
+Ethernet"); recorded for anyone still using the script.
+
+| # | Where | Finding | Status |
+|---|---|---|---|
+| N1 | `netshare.sh` `cmd_up` (dnsmasq start) | Without a dnsmasq systemd unit it runs `pkill -x dnsmasq`, which kills every dnsmasq on the machine (NetworkManager's shared connections, libvirt, LXD). With the unit it restarts and `systemctl enable`s the system-wide dnsmasq service, which stays enabled after teardown and serves DNS on port 53 next to systemd-resolved. | open (orchestrator runs its own DHCP-only instance) |
+| N2 | `netshare.sh` `load_profile`, `load_state` | Profiles in `~/.config/netshare/profiles/` are `source`d by bash running as root, so anything running as the user can put commands in a profile and have them run as root the next time netshare runs; a passwordless sudo rule for netshare would be passwordless root. | open (orchestrator's helper takes checked arguments only) |
+| N3 | `netshare.sh` `configure_ufw`, `configure_firewalld` | `configure_ufw` sets `DEFAULT_FORWARD_POLICY="ACCEPT"` in `/etc/default/ufw` and never puts it back, so the firewall forwards everything after sharing stops. firewalld zones are changed with `--permanent`, and the dnsmasq and NetworkManager files go to `/etc`, so a crash or reboot mid-session leaves them until the next netshare run. | open (orchestrator changes runtime state only) |
+| N4 | `netshare.sh` | Asks questions (`ask_yn`) on conflicts, a missing upstream route or a Wi-Fi downstream, and has no machine-readable status, so it can't be driven by another program. | open |
+
 ## Test machines (M2 mac mini + VM)
 
 | # | Where | Finding | Status |

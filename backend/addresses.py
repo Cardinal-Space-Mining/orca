@@ -309,10 +309,13 @@ class Finder:
         if not force and time.time() - self.neighbours_s < NEIGHBOUR_CACHE_S:
             return
         try:
-            self.neighbours = await link.call('net.neighbours', timeout_s=5)
-            self.neighbours_s = time.time()
+            neighbours = await link.call('net.neighbours', timeout_s=5)
         except Exception:  # an old agent, or the local link restarting
-            pass
+            return
+        # Devices that got an address from this machine's internet sharing.
+        neighbours.update(self.orchestrator.sharing.leaseNeighbours())
+        self.neighbours = neighbours
+        self.neighbours_s = time.time()
 
     async def isKnownHost(self, name: str, port: Optional[int]) -> bool:
         if port and port != 22:

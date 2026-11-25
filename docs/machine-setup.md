@@ -41,6 +41,12 @@ Nothing else is installed by hand: the orchestrator copies its agent to
   built with `./src/build.sh`. The Deploy page can create and build it: it
   needs `rsync` on the machine (`sudo apt install rsync`) and ROS under
   `/opt/ros`.
+- **Internet sharing** (driver stations, or any machine that shares its
+  internet over Ethernet): Network → Internet sharing → *Install helper* on
+  that machine, and type your sudo password in the terminal that opens. It
+  installs `/usr/local/sbin/orchestrator-share`, the sudoers rule
+  `/etc/sudoers.d/orchestrator-share` and `dnsmasq-base`. To remove it:
+  `sudo rm /usr/local/sbin/orchestrator-share /etc/sudoers.d/orchestrator-share`.
 
 ### Robot computers: CAN without a password prompt
 

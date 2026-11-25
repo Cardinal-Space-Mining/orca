@@ -79,6 +79,8 @@ MAX_BUFFERED_LINES = 5000
 MAX_FINISHED_PROCESSES = 30
 MAX_LINE_CHARACTERS = 4000
 OUTPUT_FLUSH_S = 0.1
+# How long an exit waits for the process's last output to be read.
+OUTPUT_DRAIN_TIMEOUT_S = 2.0
 PARTIAL_LINE_FLUSH_S = 0.5
 PTY_COLUMNS = 200
 PTY_ROWS = 50
@@ -745,6 +747,129 @@ def installedRosDistros():
 
 
 
+# --- Internet sharing ---------------------------------------------------------
+
+# Sharing this machine's internet over an Ethernet port goes through a small
+# root-owned helper (share_helper.py, installed by the orchestrator with a
+# sudoers rule), so it works without a password but can't do anything else.
+SHARE_HELPER_PATH = '/usr/local/sbin/orchestrator-share'
+SHARE_SUDO_CHECK_S = 60.0
+SHARE_COMMAND_TIMEOUT_S = 40.0
+share_sudo_check = {'checked_s': 0.0, 'allowed': False, 'hash': None}
+
+
+def fileHash(path):
+    try:
+        with open(path, 'rb') as file:
+            return hashlib.sha256(file.read()).hexdigest()[:12]
+    except OSError:
+        return None
+
+
+def shareSudoAllowed(helper_hash):
+    """True if sudo runs the helper without a password (checked once a
+    minute, and again when the helper changes)."""
+    check = share_sudo_check
+    if check['hash'] == helper_hash \
+            and time.time() - check['checked_s'] < SHARE_SUDO_CHECK_S:
+        return check['allowed']
+    completed = subprocess.run(['sudo', '-n', '-l', SHARE_HELPER_PATH],
+                               capture_output=True, text=True)
+    check.update(checked_s=time.time(), allowed=completed.returncode == 0,
+                 hash=helper_hash)
+    return check['allowed']
+
+
+def shareNeighbours(interface):
+    """Devices seen on one port: [{address, mac, state}]."""
+    output = runCommand(['ip', '-j', '-4', 'neigh', 'show', 'dev',
+                         interface]) or '[]'
+    try:
+        entries = json.loads(output)
+    except ValueError:
+        return []
+    return [{'address': entry['dst'], 'mac': entry['lladdr'],
+             'state': (entry.get('state') or [''])[0].lower()}
+            for entry in entries if entry.get('lladdr')]
+
+
+def shareStatus(expected_hash):
+    if IS_MACOS:
+        return {'supported': False,
+                'reason': 'sharing is only available on Linux machines'}
+    helper_hash = fileHash(SHARE_HELPER_PATH)
+    sessions = []
+    if helper_hash:
+        output = runCommand([sys.executable, SHARE_HELPER_PATH, 'status'])
+        try:
+            sessions = json.loads(output or '{}').get('sessions', [])
+        except ValueError:
+            sessions = []
+    for session in sessions:
+        session['neighbours'] = shareNeighbours(session['downstream'])
+    route = defaultRoute() or {}
+    ports = []
+    for interface in linuxInterfaces():
+        if interface['kind'] not in ('ethernet', 'wifi'):
+            continue
+        ports.append({
+            'name': interface['name'], 'kind': interface['kind'],
+            'mac': interface['mac'], 'ipv4': interface['ipv4'],
+            'is_up': interface['is_up'],
+            'carrier': (readText('/sys/class/net/%s/carrier'
+                                 % interface['name']) or '').strip() == '1',
+            'is_default_route': interface['name'] == route.get('interface'),
+        })
+    return {
+        'supported': True,
+        'helper_installed': helper_hash is not None,
+        'helper_hash': helper_hash,
+        'helper_current': helper_hash == expected_hash,
+        'sudo_ok': bool(helper_hash) and shareSudoAllowed(helper_hash),
+        'dnsmasq_installed': shutil.which('dnsmasq') is not None
+        or os.path.exists('/usr/sbin/dnsmasq'),
+        'default_route': route,
+        'ports': ports,
+        'sessions': sessions,
+    }
+
+
+def runShareHelper(arguments):
+    try:
+        completed = subprocess.run(
+            ['sudo', '-n', SHARE_HELPER_PATH] + arguments,
+            capture_output=True, text=True, timeout=SHARE_COMMAND_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('the sharing helper took too long')
+    try:
+        result = json.loads(completed.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        message = (completed.stderr or completed.stdout).strip()
+        if 'password is required' in message:
+            message = ('sudo asked for a password: install the sharing '
+                       'helper first')
+        raise RuntimeError(message or 'the sharing helper failed')
+    if not result.get('ok'):
+        raise RuntimeError(result.get('error') or 'sharing failed')
+    return result
+
+
+def shareUp(params):
+    arguments = ['up', '--name', str(params['name']),
+                 '--downstream', str(params['downstream'])]
+    for key in ('upstream', 'subnet', 'dns', 'lease'):
+        if params.get(key):
+            arguments += ['--' + key, str(params[key])]
+    if params.get('keep_eee'):
+        arguments.append('--keep-eee')
+    return runShareHelper(arguments)
+
+
+def shareDown(params):
+    return runShareHelper(['down', '--name', str(params['name'])])
+
+
+
 # --- Network tools ------------------------------------------------------------
 
 
@@ -1253,8 +1378,9 @@ class SupervisedProcess:
         self.started_s = time.time()
         self.writeLog(('$ %s  (in %s)\n' % (
             ' '.join(self.argv), self.cwd)).encode())
-        threading.Thread(target=self.readOutput, args=(master, loop),
-                         daemon=True).start()
+        self.reader = threading.Thread(target=self.readOutput,
+                                       args=(master, loop), daemon=True)
+        self.reader.start()
         threading.Thread(target=self.waitForExit, args=(loop,),
                          daemon=True).start()
 
@@ -1274,12 +1400,16 @@ class SupervisedProcess:
 
     def waitForExit(self, loop):
         return_code = self.popen.wait()
+        # Report the exit after the last output (the lines just before a
+        # crash matter most), unless something the process left running in
+        # the background keeps the terminal open.
+        self.reader.join(OUTPUT_DRAIN_TIMEOUT_S)
         loop.call_soon_threadsafe(self.onExit, return_code)
 
     # --- Output (loop thread) ---
 
     def writeLog(self, data):
-        if self.log_bytes >= MAX_PROCESS_LOG_BYTES:
+        if self.log_bytes >= MAX_PROCESS_LOG_BYTES or self.log_file.closed:
             return
         self.log_bytes += len(data)
         self.log_file.write(data)
@@ -1712,6 +1842,9 @@ class Daemon:
             'net.tcp': self.methodNetTcp,
             'net.scan': self.methodNetScan,
             'net.neighbours': self.methodNetNeighbours,
+            'share.status': self.methodShareStatus,
+            'share.up': self.methodShareUp,
+            'share.down': self.methodShareDown,
             'bags.list': self.methodBagsList,
             'bags.delete': self.methodBagsDelete,
             'logs.list': self.methodLogsList,
@@ -1857,6 +1990,15 @@ class Daemon:
         ports = [int(port) for port in params.get('ports') or [22]]
         return await scanNetwork(params['cidr'], ports,
                                  float(params.get('timeout_s', 0.6)))
+
+    async def methodShareStatus(self, session, params):
+        return await self.inThread(shareStatus, params.get('expected_hash'))
+
+    async def methodShareUp(self, session, params):
+        return await self.inThread(shareUp, params)
+
+    async def methodShareDown(self, session, params):
+        return await self.inThread(shareDown, params)
 
     async def methodNetNeighbours(self, session, params):
         '''{ip: mac} of hosts this machine has talked to recently.'''

@@ -6,6 +6,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { html, formatDuration, postJson, StatusDot } from './common.js';
+import { SharingPanel } from './sharing.js';
 import { trafficStore } from './traffic.js';
 
 
@@ -731,11 +732,13 @@ export function NetworkView({ state, now }) {
     return html`
         <div class="page-head"><div>
             <h1>Network</h1>
-            <p>The robot's link: bandwidth against the competition limit, live
-                traffic, Wi-Fi, and tools to find and test machines.</p>
+            <p>The robot's link: bandwidth against the competition limit,
+                internet sharing over Ethernet, live traffic, Wi-Fi, and tools
+                to find and test machines.</p>
         </div></div>
         <div class="stack">
             <${CompetitionPanel} state=${state} />
+            <${SharingPanel} state=${state} now=${now} />
             <${BudgetPanel} state=${state} now=${now} />
             <${TrafficPanel} state=${state} />
             <${WifiPanel} state=${state} />

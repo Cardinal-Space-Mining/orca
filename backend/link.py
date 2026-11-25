@@ -31,6 +31,7 @@ RECONNECT_DELAYS_S = [2, 5, 10, 20]
 STATS_INTERVAL_S = (2.0, 10.0)
 PING_PERIOD_S = (5.0, 15.0)
 VM_PERIOD_S = (5.0, 15.0)
+SHARING_PERIOD_S = (5.0, 15.0)
 WORKSPACE_PERIOD_S = (30.0, 120.0)
 STREAM_LIMIT_BYTES = 16 * 1024 * 1024
 ROUTE_STAGGER_S = 0.4
@@ -267,6 +268,7 @@ class MachineLink:
             'stats': None,
             'workspace': None,
             'vm': None,
+            'sharing': None,
         }
 
     # --- State ---
@@ -336,15 +338,22 @@ class MachineLink:
             except asyncio.TimeoutError:
                 pass
 
+    async def candidateRoutes(self) -> list:
+        '''Routes to try, best first: the inventory's direct routes (in its
+        order), then addresses found at run time (addresses.py), then jumps
+        through other machines (a fallback, e.g. the mac's host-only link to
+        its VM).'''
+        if self.machine.is_local:
+            return [None]  # None: run the agent directly
+        direct = [route for route in self.machine.routes if not route.via]
+        jumps = [route for route in self.machine.routes if route.via]
+        return (direct
+                + await self.orchestrator.finder.foundRoutes(self.machine)
+                + jumps)
+
     async def connectAnyRoute(self) -> bool:
         finder = self.orchestrator.finder
-        if self.machine.is_local:
-            routes = [None]  # None: run the agent directly
-        else:
-            # The inventory's routes first (in its order), then addresses
-            # found at run time (addresses.py).
-            routes = (list(self.machine.routes)
-                      + await finder.foundRoutes(self.machine))
+        routes = await self.candidateRoutes()
         if not routes:
             self.setConnection(
                 state='connecting', retry_at_s=None, unknown_host_key=None,
@@ -626,8 +635,9 @@ class MachineLink:
         return periods[1 if competition else 0]
 
     def pollTasks(self) -> list:
-        tasks = [self.poll(PING_PERIOD_S, self.measureLatency)]
-        if len(self.machine.routes) > 1:
+        tasks = [self.poll(PING_PERIOD_S, self.measureLatency),
+                 self.poll(SHARING_PERIOD_S, self.refreshSharing)]
+        if not self.machine.is_local:
             tasks.append(self.preferEarlierRoutes())
         if self.machine.workspace:
             tasks.append(self.poll(WORKSPACE_PERIOD_S, self.refreshWorkspace))
@@ -671,14 +681,16 @@ class MachineLink:
         live on this connection. Supervised processes are unaffected.'''
         while True:
             await asyncio.sleep(ROUTE_UPGRADE_PERIOD_S)
-            routes = self.machine.routes
             if self.terminals or self.active_route is None:
                 continue
-            if self.active_route in routes:
-                preferred = routes[:routes.index(self.active_route)]
-            else:
-                preferred = routes  # on a found address: any listed route
-            for route in preferred:
+            routes = await self.candidateRoutes()
+            # Same address and jump: the same route, even if it was found a
+            # different way this time (neighbour vs learned).
+            position = next((index for index, route in enumerate(routes)
+                             if route.host == self.active_route.host
+                             and route.via == self.active_route.via),
+                            len(routes))
+            for route in routes[:position]:
                 _, connection, _, _ = await self.probe(route, 0)
                 if connection is not None:
                     await connection.close()
@@ -712,6 +724,9 @@ class MachineLink:
         self.state['workspace'] = await self.call(
             'workspace.status', {'path': self.machine.workspace})
         self.publish()
+
+    async def refreshSharing(self):
+        await self.orchestrator.sharing.refresh(self)
 
     async def refreshVm(self):
         self.state['vm'] = await self.call(

@@ -25,7 +25,12 @@ Small HTTP server for the orchestrator's web interface (standard library only).
     GET  /api/machines/<id>/logs/read?path=&max_bytes=[&download=1]
     POST /api/machines/<id>/vm/<action>     start, stop, restart, kill, commit,
                                             backup, restore (a run)
-    POST /api/machines/<id>/terminals       {"kind": "shell"|"serial"}
+    POST /api/machines/<id>/terminals       {"kind": "shell"|"serial"|
+                                            "share-install"}
+    POST /api/machines/<id>/sharing/up      {"downstream", "upstream",
+                                            "subnet", "dns", "lease"}
+    POST /api/machines/<id>/sharing/down    {"name"}
+    POST /api/machines/<id>/sharing/refresh
     POST /api/machines/<id>/terminals/<t>/input|resize|close
     GET  /api/settings, POST /api/settings  orchestrator settings (competition
                                             mode, budget sources)
@@ -284,6 +289,17 @@ class HttpServer:
         if method == 'POST' and len(parts) == 2 and parts[0] == 'vm':
             return orchestrator.vm.run(machine_id, parts[1],
                                        request.json()).snapshot()
+        if method == 'POST' and len(parts) == 2 and parts[0] == 'sharing':
+            body = request.json()
+            if parts[1] == 'up':
+                return await orchestrator.sharing.up(machine_id, body)
+            if parts[1] == 'down':
+                return await orchestrator.sharing.down(machine_id,
+                                                       body.get('name'))
+            if parts[1] == 'refresh':
+                link = orchestrator.link(machine_id)
+                await orchestrator.sharing.refresh(link)
+                return link.state['sharing'] or {}
         if method == 'POST' and parts[:1] == ['terminals']:
             return await self.answerTerminal(request, machine_id, parts[1:])
         if parts[:1] == ['bags']:

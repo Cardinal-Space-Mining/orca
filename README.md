@@ -26,7 +26,7 @@ CAN permissions): [docs/machine-setup.md](docs/machine-setup.md).
 | Deploy | Push this workspace's `src/` to other machines and build there; compare first to see exactly what changes. |
 | Bags | Recordings on each machine with length, size and topics; pull them here, delete them there once pulled. |
 | Logs | Orchestrator run logs, each package's latest build log, ROS logs, the agent's and the VM autostart log, per machine. |
-| Network | The comm-link bandwidth budget (average against the guidebook's 4,000 kbps, per source and per topic), competition mode, live traffic on every interface, Wi-Fi channels, and ping / port check / network scan from any machine. |
+| Network | The comm-link bandwidth budget (average against the guidebook's 4,000 kbps, per source and per topic), competition mode, internet sharing over Ethernet (with the devices that show up on the port), live traffic on every interface, Wi-Fi channels, and ping / port check / network scan from any machine. |
 | Config | Browse every action and preset of `lance/config`, what a preset inherits and enables, and try `key:=value` arguments without launching. |
 
 ## Machines
@@ -236,6 +236,38 @@ offered once an identical copy is here.
   Foxglove 8765) and a scan of a network (up to a /22) that lists who answers,
   with MAC addresses and which inventory machine each address belongs to.
 
+## Sharing internet over Ethernet
+
+In the pits the robot is plugged straight into the driver station, and the
+test bench often has no router either. **Network → Internet sharing** shares a
+Linux machine's internet with whatever is plugged into one of its Ethernet
+ports (a USB adapter is fine): devices get addresses by DHCP (default subnet
+10.11.11.0/24, or the next free 10.11.x.0/24 if that one is in use) and the
+machine routes their traffic out through whatever connection it has.
+
+- **Plug in, then find.** Devices that show up on the port are listed with
+  their address, MAC and hostname. Known machines are matched by MAC and
+  connect on their own within a few seconds (their inventory addresses don't
+  need to match); anything else has **Add machine**.
+- **Setup, once per machine:** *Install helper* opens a terminal on that
+  machine that asks for your sudo password once. It installs a small
+  root-owned program, `/usr/local/sbin/orchestrator-share` (from
+  [agent/share_helper.py](agent/share_helper.py)), plus a sudoers rule that
+  lets you run just that program without a password, and `dnsmasq-base` if
+  it's missing. The program only accepts checked arguments and reads no file a
+  user can write.
+- **Nothing permanent:** the port's address, NetworkManager leaving the port
+  alone, IP forwarding, tagged firewall rules and a DHCP-only dnsmasq all go
+  away on *Stop sharing* or a reboot. Leases are kept
+  (`/var/lib/orchestrator-share/`), so a device usually gets the same address
+  back.
+- It refuses to share over Wi-Fi (devices can't join a Wi-Fi adapter that
+  isn't an access point) or over the port that is the machine's own internet.
+  Energy Efficient Ethernet is switched off on the shared port while sharing:
+  RTL8153 USB adapters drop packets with it on.
+- Replaces [netshare](https://github.com/S1ink/netshare); see FINDINGS.md
+  (N1-N4) for why it isn't used directly.
+
 ## How it works
 
 ```
@@ -285,8 +317,8 @@ temporary directory.
 | 3 | VM control, terminals and serial console; editing the inventory in the app | done |
 | 4 | Network tools, bandwidth budget, competition mode; resizable, dockable terminals | done |
 | 5 | Addressing: machines found by host key, remembered addresses, neighbour matching and discovery; live addresses in launches; a test suite | done |
-| 6 | Internet sharing over Ethernet (replaces netshare) | next |
-| 7 | Add-machine wizard with discovery | |
+| 6 | Internet sharing over Ethernet (replaces netshare), with devices on the port matched to machines | done |
+| 7 | Add-machine wizard with discovery | next |
 | 8 | Setup checklist per machine (SSH key, sudoers, lingering, EEE...) | |
 | 9 | Configurability: edit scenarios, launch-config presets (with descriptions) and orchestrator settings in the app | |
 | 10 | Native macOS processes | |

@@ -21,6 +21,7 @@ from .link import MachineLink
 from .runs import PlanError, Planner, Run, expandHome, newRunId
 from .settings import loadSettings, mergeDefaults, saveSettings
 from .scenarios import loadScenarios
+from .sharing import Sharing
 from .vm import VmController
 
 
@@ -51,6 +52,7 @@ class Orchestrator:
         self.settings = loadSettings()
         self.budget = BudgetTracker(self)
         self.finder = Finder(self)
+        self.sharing = Sharing(self)
         self.lance_config = None
         self.lance_config_error = None
 
@@ -280,6 +282,9 @@ class Orchestrator:
             guest = self.links_by_id.get(link.machine.vm.guest or '')
             title = 'Serial console · %s' % (
                 guest.machine.label if guest else link.machine.label)
+        elif kind == 'share-install':
+            params['argv'] = await self.sharing.installCommand(machine_id)
+            title = 'Install sharing helper · %s' % link.machine.label
         else:
             params['cwd'] = link.machine.workspace or '~'
             title = 'Shell · %s' % link.machine.label

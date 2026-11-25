@@ -94,6 +94,17 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
                                         process_id='test-echo')
         self.assertEqual(output['lines'][:2], ['first', 'second'])
 
+    async def test_exit_reported_after_last_output(self):
+        await self.client.call(
+            'process.start', process_id='test-burst', label='burst',
+            argv=['/bin/sh', '-c', 'seq 1 200000'],
+            cwd=self.directory.name, env={}, meta={})
+        final = await self.client.waitForEvent(
+            lambda message: message.get('event') == 'process.state'
+            and message['data']['process_id'] == 'test-burst'
+            and message['data']['state'] == 'exited')
+        self.assertEqual(final['data']['num_lines'], 200000)
+
     async def test_unknown_method(self):
         with self.assertRaises(RuntimeError):
             await self.client.call('no.such.method')

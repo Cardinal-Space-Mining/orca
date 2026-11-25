@@ -1,4 +1,4 @@
-// Live orchestrator state over one Server-Sent Events stream: a "snapshot"
+// Live Orca state over one Server-Sent Events stream: a "snapshot"
 // when the stream opens, then "machine", "run", "run.removed" and "output"
 // events.
 //
@@ -103,7 +103,7 @@ export function useProcessOutput(machineId, processId) {
 }
 
 
-// --- Orchestrator state ------------------------------------------------------
+// --- Orca state ------------------------------------------------------
 
 function replaceMachine(previous, machine) {
     if (!previous) return previous;
@@ -139,7 +139,7 @@ function mergeBudget(previous, update) {
     return { ...update, history };
 }
 
-export function useOrchestratorState() {
+export function useOrcaState() {
     const [state, setState] = useState(null);
     const [isLive, setIsLive] = useState(false);
 

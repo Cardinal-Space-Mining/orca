@@ -1,5 +1,5 @@
 '''The agent end to end: a real daemon in a temporary directory, reached
-through `attach` exactly as the orchestrator does over SSH.'''
+through `attach` exactly as Orca does over SSH.'''
 
 import asyncio
 import json
@@ -50,12 +50,13 @@ class AgentClient:
                 return message
 
 
-class AgentTest(unittest.IsolatedAsyncioTestCase):
+class AgentHarness(unittest.IsolatedAsyncioTestCase):
+    '''Starts a daemon in a temporary directory for each test.'''
 
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix='orch-test-')
         environment = dict(os.environ,
-                           ORCHESTRATOR_AGENT_DIR=self.directory.name)
+                           ORCA_AGENT_DIR=self.directory.name)
         self.process = await asyncio.create_subprocess_exec(
             sys.executable, '-u', AGENT_SOURCE_PATH, 'attach',
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
@@ -71,6 +72,9 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
             # Give the daemon a moment to remove its socket and lock.
             await asyncio.sleep(0.5)
             self.directory.cleanup()
+
+
+class AgentTest(AgentHarness):
 
     async def test_hello_and_ping(self):
         hello = await self.client.waitForEvent(
@@ -108,6 +112,118 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_method(self):
         with self.assertRaises(RuntimeError):
             await self.client.call('no.such.method')
+
+
+
+class CleanupTest(AgentHarness):
+    '''Cleanup with the daemon's home moved into a temporary folder too, so
+    ~/.ros/log and ~/.orchestrator are the test's, never the real ones.'''
+
+    async def asyncSetUp(self):
+        self.home = tempfile.TemporaryDirectory(prefix='orca-home-')
+        home = self.home.name
+        self.workspace = os.path.join(home, 'ws')
+        self.overlays = os.path.join(self.workspace, 'install', 'lance',
+                                     'share', 'lance', 'config')
+        os.makedirs(self.overlays)
+        self.write(os.path.join(self.overlays, 'launch.json'))
+        self.write(os.path.join(self.overlays, 'orca-old-run.robot.json'))
+        self.in_use = os.path.join(self.overlays, 'orca-new-run.robot.json')
+        self.write(self.in_use)
+        ros_logs = os.path.join(home, '.ros', 'log')
+        self.write(os.path.join(ros_logs, 'old_node.log'), age_s=86400)
+        self.write(os.path.join(ros_logs, 'new_node.log'))
+        for number in range(6):
+            self.write(os.path.join(self.workspace, 'log',
+                                    'build_2026-01-0%d' % (number + 1),
+                                    'lance', 'stdout_stderr.log'))
+        self.write(os.path.join(home, '.orchestrator', 'runs', 'x.log'))
+        self.original_home = os.environ['HOME']
+        os.environ['HOME'] = home  # inherited by the daemon
+        try:
+            await super().asyncSetUp()
+        finally:
+            os.environ['HOME'] = self.original_home
+
+    async def asyncTearDown(self):
+        try:
+            await super().asyncTearDown()
+        finally:
+            self.home.cleanup()
+
+    @staticmethod
+    def write(path, age_s=0):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as file:
+            file.write('x' * 100)
+        if age_s:
+            stamp = os.path.getmtime(path) - age_s
+            os.utime(path, (stamp, stamp))
+
+    def params(self, **extra):
+        return dict(workspace=self.workspace,
+                    overlay_directory=self.overlays, **extra)
+
+    async def test_cleanup_leaves_what_is_in_use(self):
+        await self.client.call(
+            'process.start', process_id='r1.robot', label='robot',
+            argv=['/bin/sh', '-c', 'sleep 30', 'json_path:=' + self.in_use],
+            cwd=self.home.name, env={}, meta={'run_id': 'r1'},
+            remove_on_exit=[self.in_use])
+        scan = await self.client.call('cleanup.scan', **self.params())
+        counts = {category['id']: category['count']
+                  for category in scan['categories']}
+        self.assertEqual(counts, {'overlays': 1, 'run_logs': 0,
+                                  'ros_logs': 1, 'build_logs': 2,
+                                  'old_agent': 1})
+
+        result = await self.client.call('cleanup.run', **self.params(
+            categories=list(counts)))
+        self.assertEqual(result['errors'], [])
+        self.assertEqual(result['removed']['build_logs']['count'], 2)
+        home = self.home.name
+        self.assertTrue(os.path.exists(self.in_use))
+        self.assertTrue(os.path.exists(os.path.join(self.overlays,
+                                                    'launch.json')))
+        self.assertFalse(os.path.exists(os.path.join(
+            self.overlays, 'orca-old-run.robot.json')))
+        self.assertEqual(os.listdir(os.path.join(home, '.ros', 'log')),
+                         ['new_node.log'])
+        self.assertEqual(len(os.listdir(os.path.join(self.workspace, 'log'))),
+                         4)
+        self.assertFalse(os.path.exists(os.path.join(home, '.orchestrator')))
+
+        # The running process's log can't go; its overlay goes when it ends.
+        record = (await self.client.call('process.list'))[0]
+        with self.assertRaises(RuntimeError):
+            await self.client.call('logs.delete', path=record['log_path'])
+        await self.client.call('process.stop', process_id='r1.robot',
+                               grace_s=1)
+        await self.client.waitForEvent(
+            lambda message: message.get('event') == 'process.state'
+            and message['data']['state'] == 'exited')
+        self.assertFalse(os.path.exists(self.in_use))
+        deleted = await self.client.call('logs.delete',
+                                         path=record['log_path'])
+        self.assertGreater(deleted['bytes'], 0)
+        self.assertFalse(os.path.exists(os.path.dirname(record['log_path'])))
+
+    async def test_only_logs_can_be_deleted(self):
+        for path in [os.path.join(self.directory.name, 'agent.log'),
+                     os.path.join(self.directory.name, 'agent.py'),
+                     self.in_use,
+                     os.path.join(self.directory.name, 'agent.sock'),
+                     os.path.join(self.workspace, 'log', '..', 'install')]:
+            with self.subTest(path=path):
+                with self.assertRaises(RuntimeError):
+                    await self.client.call('logs.delete', path=path,
+                                           workspace=self.workspace)
+        old_build = os.path.join(self.workspace, 'log', 'build_2026-01-01',
+                                 'lance', 'stdout_stderr.log')
+        await self.client.call('logs.delete', path=old_build,
+                               workspace=self.workspace)
+        self.assertFalse(os.path.exists(os.path.dirname(os.path.dirname(
+            old_build))))
 
 
 if __name__ == '__main__':

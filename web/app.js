@@ -1,10 +1,10 @@
-// The orchestrator's web interface. Preact + htm, loaded as plain ES modules
+// Orca's web interface. Preact + htm, loaded as plain ES modules
 // (no build step): edit a file under js/ and reload the page.
 
 import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { html, Icon, postJson, shortCommit } from './js/common.js';
-import { useOrchestratorState, useNow } from './js/state.js';
+import { useOrcaState, useNow } from './js/state.js';
 import { LaunchView } from './js/launch.js';
 import { ScenarioEditor } from './js/scenarioedit.js';
 import { RunsView, isRunActive } from './js/runs.js';
@@ -16,6 +16,8 @@ import { InventoryView } from './js/inventory.js';
 import { AddMachineView } from './js/addmachine.js';
 import { TerminalDock } from './js/terminals.js';
 import { NetworkPage, preferredView } from './js/networkpage.js';
+import { SettingsView } from './js/settings.js';
+import { logoFor, toggleTheme, useTheme } from './js/theme.js';
 
 
 const TABS = [
@@ -26,6 +28,7 @@ const TABS = [
     { id: 'bags', label: 'Bags', icon: 'archive' },
     { id: 'logs', label: 'Logs', icon: 'scroll-text' },
     { id: 'config', label: 'Config', icon: 'sliders-horizontal' },
+    { id: 'settings', label: 'Settings', icon: 'settings', iconOnly: true },
 ];
 
 // The open tab lives in the URL (#/runs/<run id>, #/machines/map/<what is
@@ -56,7 +59,7 @@ function useLocation() {
 }
 
 
-// Competition mode: less orchestrator traffic on the robot's link (slower
+// Competition mode: less Orca traffic on the robot's link (slower
 // status, no live output from other machines).
 function CompetitionSwitch({ state }) {
     const isOn = state.settings.competition_mode;
@@ -65,7 +68,7 @@ function CompetitionSwitch({ state }) {
         <button class="competition-switch ${isOn ? 'on' : ''}"
             title=${isOn ? 'Competition mode is on: status every 10 s, output '
                 + 'from other machines only on request. Click to turn off.'
-                : "Competition mode: keep the orchestrator's own traffic on "
+                : "Competition mode: keep Orca's own traffic on "
                 + "the robot's link small. Click to turn on."}
             onClick=${() => postJson('/api/settings',
                 { competition_mode: !isOn })}>
@@ -76,20 +79,34 @@ function CompetitionSwitch({ state }) {
         </button>`;
 }
 
+// Light for a bright day outside, dark for the pit.
+function ThemeButton() {
+    const { theme } = useTheme();
+    const next = theme === 'dark' ? 'light' : 'dark';
+    return html`
+        <button class="theme-button" title="Switch to the ${next} theme"
+            aria-label="Switch to the ${next} theme" onClick=${toggleTheme}>
+            <${Icon} name=${theme === 'dark' ? 'sun' : 'moon'} size=${16} />
+        </button>`;
+}
+
 function TopBar({ state, isLive, tab, navigate }) {
+    const { theme } = useTheme();
     const local = state && state.machines.find((entry) => entry.machine.is_local);
     const workspace = local && local.workspace;
     const numActiveRuns = state ? state.runs.filter(isRunActive).length : 0;
     return html`
         <header class="topbar">
-            <div class="brand"><img src="/static/csm-logo-dark.svg" alt="" />
-                Orchestrator</div>
+            <div class="brand"><img src=${logoFor(theme)} alt="" />
+                Orca</div>
             <nav class="tabs">
                 ${TABS.map((entry) => html`
                     <button class="tab ${tab === entry.id ? 'active' : ''}"
                         disabled=${entry.soon}
+                        title=${entry.iconOnly ? entry.label : ''}
                         onClick=${() => navigate(entry.id)}><${Icon}
-                        name=${entry.icon} size=${15} />${entry.label}
+                        name=${entry.icon} size=${15} />${entry.iconOnly ? ''
+                            : entry.label}
                         ${entry.id === 'runs' && numActiveRuns > 0 && html`
                             <span class="badge">${numActiveRuns}</span>`}
                         ${entry.soon && html`<span class="soon">soon</span>`}
@@ -103,9 +120,10 @@ function TopBar({ state, isLive, tab, navigate }) {
                         workspace.head)}</span>
                 </div>`}
             ${state && html`<${CompetitionSwitch} state=${state} />`}
+            <${ThemeButton} />
             <div class="live">
                 <span class="dot ${isLive ? 'good' : 'bad pulse'}"></span>
-                ${isLive ? 'Live' : 'Orchestrator disconnected'}
+                ${isLive ? 'Live' : 'Orca disconnected'}
             </div>
         </header>`;
 }
@@ -139,6 +157,8 @@ function Page({ state, location, navigate, now }) {
                 onSelect=${(machineId) => navigate('logs', machineId)} />`;
         case 'config':
             return html`<${ConfigView} />`;
+        case 'settings':
+            return html`<${SettingsView} state=${state} />`;
         default:
             if (location.detail === 'edit') return html`<${InventoryView} />`;
             if (location.detail === 'add') {
@@ -153,7 +173,7 @@ function Page({ state, location, navigate, now }) {
 }
 
 function App() {
-    const { state, isLive } = useOrchestratorState();
+    const { state, isLive } = useOrcaState();
     const [location, navigate] = useLocation();
     const now = useNow();
     return html`
@@ -163,7 +183,7 @@ function App() {
             ${state ? html`<${Page} state=${state} location=${location}
                 navigate=${navigate} now=${now} />`
                 : html`<div class="placeholder">
-                    Connecting to the orchestrator…</div>`}
+                    Connecting to Orca…</div>`}
         </main>
         <${TerminalDock} />`;
 }

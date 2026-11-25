@@ -1,5 +1,5 @@
-// Shared helpers: the htm binding, formatting, small components and the
-// orchestrator API.
+// Shared helpers: the htm binding, formatting, small components and
+// Orca API.
 
 import { h } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -61,7 +61,7 @@ export function levelFor(percent, warnAt, badAt) {
 }
 
 
-// --- Orchestrator API --------------------------------------------------------
+// --- Orca API --------------------------------------------------------
 
 async function readResponse(response) {
     const body = await response.json().catch(() => ({}));

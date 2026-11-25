@@ -20,7 +20,7 @@ function formatStart(seconds) {
         hour: '2-digit', minute: '2-digit' });
 }
 
-function DiskBar({ disk }) {
+export function DiskBar({ disk }) {
     if (!disk) return null;
     const used = disk.total_bytes - disk.free_bytes;
     const percent = 100 * used / disk.total_bytes;

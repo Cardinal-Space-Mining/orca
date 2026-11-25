@@ -1,23 +1,48 @@
 // Terminals: shells on any machine and VM serial consoles, shown in a dock
 // at the bottom of every page. xterm.js (web/vendor) draws them; keystrokes
-// go to the orchestrator by POST and output comes back on the event stream.
+// go to Orca by POST and output comes back on the event stream.
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { html, postJson } from './common.js';
+import { currentTheme, onThemeChange } from './theme.js';
 
 
-const THEME = {
-    background: '#08080a',
-    foreground: '#e6e6e8',
-    cursor: '#ff5c68',
-    cursorAccent: '#08080a',
-    selectionBackground: 'rgba(200, 32, 47, 0.35)',
-    black: '#1d1e22', red: '#ff6b70', green: '#4fdc9c', yellow: '#f5b74a',
-    blue: '#6fb3ff', magenta: '#d59bff', cyan: '#5fd6e0', white: '#e6e6e8',
-    brightBlack: '#64666d', brightRed: '#ff8a8e', brightGreen: '#7ae8b6',
-    brightYellow: '#ffcf7a', brightBlue: '#9ccaff', brightMagenta: '#e3bcff',
-    brightCyan: '#8ee6ee', brightWhite: '#ffffff',
+// xterm.js takes plain colours, one set per page theme (the dock's
+// background in style.css matches).
+const TERMINAL_THEMES = {
+    dark: {
+        background: '#06090c',
+        foreground: '#e0e7ee',
+        cursor: '#ff5c68',
+        cursorAccent: '#06090c',
+        selectionBackground: 'rgba(76, 194, 255, 0.3)',
+        black: '#151f2a', red: '#ff6b70', green: '#4fdc9c', yellow: '#f5b74a',
+        blue: '#6fb3ff', magenta: '#d59bff', cyan: '#5fd6e0', white: '#e0e7ee',
+        brightBlack: '#586779', brightRed: '#ff8a8e', brightGreen: '#7ae8b6',
+        brightYellow: '#ffcf7a', brightBlue: '#9ccaff',
+        brightMagenta: '#e3bcff', brightCyan: '#8ee6ee',
+        brightWhite: '#ffffff',
+    },
+    // Dark ink on white: "white" text is drawn dark grey so it stays
+    // readable, as light terminal themes usually do.
+    light: {
+        background: '#ffffff',
+        foreground: '#121c27',
+        cursor: '#d42f3a',
+        cursorAccent: '#ffffff',
+        selectionBackground: 'rgba(27, 127, 198, 0.25)',
+        black: '#121c27', red: '#c42b2b', green: '#137a4b', yellow: '#8f5c00',
+        blue: '#1a5fb4', magenta: '#8a3cb4', cyan: '#0b7480', white: '#5b6a7b',
+        brightBlack: '#4a5868', brightRed: '#e03c3c', brightGreen: '#1a9460',
+        brightYellow: '#a86b00', brightBlue: '#2a73cc',
+        brightMagenta: '#9d4fc7', brightCyan: '#0f8794',
+        brightWhite: '#3e4d5e',
+    },
 };
+
+function terminalTheme() {
+    return TERMINAL_THEMES[currentTheme()] || TERMINAL_THEMES.dark;
+}
 
 
 // --- Store -------------------------------------------------------------------
@@ -136,11 +161,12 @@ class TerminalStore {
     }
 
     // When the page goes away, hang up its terminals (sendBeacon survives
-    // the unload; fetch doesn't).
+    // the unload; fetch doesn't). As JSON: Orca refuses other POSTs.
     closeAllOnUnload() {
         for (const entry of this.entries) {
             if (!entry.exited) {
-                navigator.sendBeacon(terminalPath(entry, 'close'), '{}');
+                navigator.sendBeacon(terminalPath(entry, 'close'), new Blob(
+                    ['{}'], { type: 'application/json' }));
             }
         }
     }
@@ -174,7 +200,7 @@ function TerminalView({ entry, isVisible }) {
 
     useEffect(() => {
         const term = new window.Terminal({
-            theme: THEME,
+            theme: terminalTheme(),
             fontFamily: 'ui-monospace, "JetBrains Mono", "SF Mono", Menlo, '
                 + '"DejaVu Sans Mono", monospace',
             fontSize: 13,
@@ -206,7 +232,13 @@ function TerminalView({ entry, isVisible }) {
             refit();
             term.focus();
         }, 0);
-        return () => observer.disconnect();
+        const stopFollowingTheme = onThemeChange(() => {
+            term.options.theme = terminalTheme();
+        });
+        return () => {
+            observer.disconnect();
+            stopFollowingTheme();
+        };
     }, [entry.key]);
 
     useEffect(() => {
@@ -243,7 +275,7 @@ function Icon({ name }) {
 // Docked at the bottom or the right, resizable by dragging its inner edge,
 // maximizable; remembered per browser. The page makes room for it (body
 // padding), so it never covers anything.
-const LAYOUT_KEY = 'orchestrator.terminal-dock';
+const LAYOUT_KEY = 'orca.terminal-dock';
 const MIN_SIZE = 160;
 const MINIMIZED_HEIGHT = 41;
 const TOPBAR_HEIGHT = 60;

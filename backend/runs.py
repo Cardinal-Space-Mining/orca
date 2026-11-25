@@ -8,7 +8,7 @@ processes start in dependency order, and if one fails to start, the ones
 already started are stopped again so nothing is left half up.
 
 Processes keep their run information in the agent (the "meta" of each
-process), so a restarted orchestrator finds its runs again.
+process), so a restarted Orca finds its runs again.
 '''
 
 from __future__ import annotations
@@ -38,6 +38,10 @@ KIND_RANK = {'ethernet': 0, 'wifi': 1, 'bridge': 2, 'can': 9, 'virtual': 9}
 
 class PlanError(Exception):
     pass
+
+
+class RunStopped(PlanError):
+    '''A process that wasn't started because its run was stopped.'''
 
 
 
@@ -144,8 +148,8 @@ def parseExtraArguments(text: str) -> dict:
 
 class Planner:
 
-    def __init__(self, orchestrator):
-        self.orchestrator = orchestrator
+    def __init__(self, orca):
+        self.orca = orca
 
     def plan(self, scenario: dict, request: dict) -> dict:
         '''request: {"assignment": {role: machine id},
@@ -191,7 +195,7 @@ class Planner:
         return options
 
     def checkMachine(self, scenario, role, machine_id, plan):
-        link = self.orchestrator.links_by_id.get(machine_id)
+        link = self.orca.links_by_id.get(machine_id)
         label = scenario['roles'][role].get('label', role)
         if link is None:
             plan['errors'].append('%s: no machine %s' % (label, machine_id))
@@ -211,7 +215,7 @@ class Planner:
         elif workspace and not workspace.get('has_install'):
             plan['errors'].append('%s: %s has no build (install/ missing)'
                                   % (label, link.machine.label))
-        reference = self.orchestrator.referenceFingerprint()
+        reference = self.orca.referenceFingerprint()
         if workspace and reference and not link.machine.is_local \
                 and workspace.get('fingerprint') != reference:
             plan['warnings'].append(
@@ -227,7 +231,7 @@ class Planner:
             if not any(process.get('role') == role and 'lance' in process
                        for process in scenario.get('processes') or []):
                 continue
-            link = self.orchestrator.links_by_id[machine_id]
+            link = self.orca.links_by_id[machine_id]
             workspace = link.state['workspace']
             if workspace and workspace.get('fingerprint'):
                 fingerprints.setdefault(workspace['fingerprint'], []).append(
@@ -243,13 +247,13 @@ class Planner:
 
     def addressesFor(self, process, assignment, request) -> tuple:
         '''Fill {ip:role} for one process. Returns (addresses, choices).'''
-        link = self.orchestrator.links_by_id[assignment[process['role']]]
+        link = self.orca.links_by_id[assignment[process['role']]]
         overrides = request.get('addresses') or {}
         addresses = {}
         choices = {}
         for role, machine_id in assignment.items():
             candidates = addressCandidates(
-                self.orchestrator.links_by_id[machine_id], link)
+                self.orca.links_by_id[machine_id], link)
             choices[role] = candidates
             chosen = overrides.get(process['key'] + '.' + role)
             if chosen:
@@ -260,7 +264,7 @@ class Planner:
 
     def planProcess(self, process, assignment, options, request) -> dict:
         role = process['role']
-        link = self.orchestrator.links_by_id[assignment[role]]
+        link = self.orca.links_by_id[assignment[role]]
         addresses, choices = self.addressesFor(process, assignment, request)
         used_roles = sorted({argument for name, argument
                              in placeholdersIn(process) if name == 'ip'})
@@ -270,7 +274,7 @@ class Planner:
                     '%s: no network shared by %s and %s; set the address by '
                     'hand' % (process.get('label', process['key']),
                               link.machine.label,
-                              self.orchestrator.links_by_id[
+                              self.orca.links_by_id[
                                   assignment[used_role]].machine.label))
         entry = {
             'key': process['key'],
@@ -307,7 +311,7 @@ class Planner:
         name (inventory "config_addresses"), as reached from from_link's
         machine. Offline machines keep the files' values.'''
         constants = {}
-        for target in self.orchestrator.links:
+        for target in self.orca.links:
             if target.connection is None or not target.state['stats']:
                 continue
             for name, kind in target.machine.config_addresses.items():
@@ -317,9 +321,9 @@ class Planner:
         return constants
 
     def planLance(self, lance, entry, link, options, addresses, extra):
-        config = self.orchestrator.lanceConfig()
+        config = self.orca.lanceConfig()
         if config is None:
-            raise PlanError("the orchestrator has no workspace, so it can't "
+            raise PlanError("Orca has no workspace, so it can't "
                             "plan lance launches")
         arguments = {key: str(value) for key, value in fillTemplate(
             lance.get('args') or {}, options, addresses).items()}
@@ -364,9 +368,9 @@ class Run:
     they've run for start_delay_s) or tasks ("task": true; dependents start
     once they've exited successfully, e.g. a push before its build)."""
 
-    def __init__(self, orchestrator, run_id: str, label: str, scenario_id: str,
+    def __init__(self, orca, run_id: str, label: str, scenario_id: str,
                  plan: Optional[dict] = None, kind: str = 'launch'):
-        self.orchestrator = orchestrator
+        self.orca = orca
         self.run_id = run_id
         self.label = label
         self.scenario_id = scenario_id
@@ -412,7 +416,7 @@ class Run:
         }
 
     def publish(self):
-        self.orchestrator.publish('run', self.snapshot())
+        self.orca.publish('run', self.snapshot())
 
     def processId(self, key: str) -> str:
         return self.run_id + '.' + key
@@ -439,7 +443,8 @@ class Run:
             *(self.startWhenReady(entry) for entry in self.plan['processes']),
             return_exceptions=True)
         errors = [result for result in results
-                  if isinstance(result, Exception)]
+                  if isinstance(result, Exception)
+                  and not isinstance(result, RunStopped)]
         self.is_starting = False
         if errors:
             self.error = '; '.join(sorted({
@@ -451,8 +456,14 @@ class Run:
     async def startWhenReady(self, entry):
         try:
             await self.waitForDependencies(entry)
+            if self.is_stopping:
+                raise RunStopped('not started: the run was stopped')
             await self.startProcess(entry)
+            if self.is_stopping:  # stopped while this one was starting
+                await self.stopEntry(self.processes[entry['key']])
             self.publish()
+        except RunStopped:
+            raise
         except (AgentError, ConnectionError, asyncio.TimeoutError,
                 PlanError) as error:
             self.has_failed = True
@@ -463,7 +474,12 @@ class Run:
         deadline = time.time() + DEPENDENCY_TIMEOUT_S
         for dependency in entry['after']:
             dependency_entry = self.processes[dependency]
-            while not self.isDependencyMet(dependency_entry, entry):
+            while True:
+                # Stopping first: stopping makes dependencies exit.
+                if self.is_stopping:
+                    raise RunStopped('not started: the run was stopped')
+                if self.isDependencyMet(dependency_entry, entry):
+                    break
                 if self.has_failed and self.stop_on_failure:
                     raise PlanError('not started: another process failed')
                 if not dependency_entry['task'] and time.time() > deadline:
@@ -488,17 +504,19 @@ class Run:
             time.time() - record['started_s'] >= entry['start_delay_s']
 
     async def startProcess(self, entry):
-        link = self.orchestrator.links_by_id[entry['machine_id']]
+        link = self.orca.links_by_id[entry['machine_id']]
+        remove_on_exit = []
         if 'run_script' in entry:
             argv = [entry['run_script']] + entry['flags'] + [
                 '%s:=%s' % item for item in entry['arguments'].items()]
             if entry['overlay']:
                 path = posixpath.join(
                     entry['overlay_directory'],
-                    'orchestrator-%s.json' % self.processId(entry['key']))
+                    'orca-%s.json' % self.processId(entry['key']))
                 written = await link.call('file.write', {
                     'path': path, 'content': overlayJson(entry['overlay'])})
                 argv.append('json_path:=' + written['path'])
+                remove_on_exit.append(written['path'])  # the agent deletes it
         else:
             argv = entry['argv']
         record = await link.call('process.start', {
@@ -507,6 +525,7 @@ class Run:
             'argv': argv,
             'cwd': entry['cwd'],
             'env': entry.get('env') or {},
+            'remove_on_exit': remove_on_exit,
             'meta': {'run_id': self.run_id, 'run_label': self.label,
                      'scenario_id': self.scenario_id, 'key': entry['key'],
                      'kind': self.kind, 'task': bool(entry.get('task'))},
@@ -517,10 +536,11 @@ class Run:
 
     async def stop(self):
         '''Stop in reverse start order, so the robot goes down after the
-        driver station that commands it.'''
+        driver station that commands it. Processes still waiting to start
+        don't start (startWhenReady checks is_stopping).'''
         self.is_stopping = True
         self.publish()
-        # By actual start time: a run recovered after an orchestrator restart
+        # By actual start time: a run recovered after an Orca restart
         # lists its processes in the order the machines reconnected.
         newest_first = sorted(
             self.processes, reverse=True,
@@ -528,18 +548,24 @@ class Run:
                 'started_s') or 0)
         for key in newest_first:
             entry = self.processes[key]
-            record = entry['record']
-            if not record or record['state'] == 'exited':
-                continue
-            link = self.orchestrator.links_by_id.get(entry['machine_id'])
-            if link is None or link.connection is None:
-                continue
-            try:
-                await link.call('process.stop',
-                                {'process_id': entry['process_id']})
-            except (AgentError, ConnectionError, asyncio.TimeoutError):
-                pass
-            await asyncio.sleep(STOP_SPACING_S)
+            if await self.stopEntry(entry):
+                await asyncio.sleep(STOP_SPACING_S)
+
+    async def stopEntry(self, entry) -> bool:
+        '''Ask its agent to stop one process; False if there was nothing to
+        stop or no way to reach it.'''
+        record = entry['record']
+        if not record or record['state'] == 'exited':
+            return False
+        link = self.orca.links_by_id.get(entry['machine_id'])
+        if link is None or link.connection is None:
+            return False
+        try:
+            await link.call('process.stop',
+                            {'process_id': entry['process_id']})
+        except (AgentError, ConnectionError, asyncio.TimeoutError):
+            pass
+        return True
 
     # --- Agent updates ---
 

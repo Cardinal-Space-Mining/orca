@@ -1,21 +1,23 @@
-# Orchestrator
+# Orca
 
-One place to run the robot: which machines are up and what code they have,
-launching across several machines at once with live output, deploying and
-building code, pulling bags, reading logs, and browsing the launch config.
+Orca is the team's robot orchestrator: one place to run the robot. Which
+machines are up and what code they have, launching across several machines at
+once with live output, deploying and building code, pulling bags, reading
+logs, and browsing and editing the launch config.
 A web app served by a small Python program on your laptop; it talks to each
 machine through SSH, so nothing on the robot listens on the network.
 
 ```bash
-./src/orchestrator/orchestrator          # from the workspace root; opens a browser tab
+./src/orchestrator/orca      # from the workspace root; opens a browser tab
 ```
 
 Options: `--port 8740`, `--no-browser`, `--bind 127.0.0.1`,
 `--workspace <path>` (default: the workspace containing the orchestrator).
 
-**Requirements:** Python 3.9+ (no packages to install) and SSH key access to
-each machine (`ssh-copy-id user@host`). Each managed machine needs `python3`
-3.9+; macOS's built-in one is fine. One-time setup per machine (host keys,
+**Requirements:** Python 3.10+ on the laptop (no packages to install;
+launch-utils, which Orca uses to read the launch config, needs 3.10) and SSH
+key access to each machine (`ssh-copy-id user@host`). Each managed machine
+needs `python3` 3.9+; macOS's built-in one is fine. One-time setup per machine (host keys,
 CAN permissions): [docs/machine-setup.md](docs/machine-setup.md).
 
 | Page | What it does |
@@ -25,8 +27,9 @@ CAN permissions): [docs/machine-setup.md](docs/machine-setup.md).
 | Runs | Everything launched, deployed or pulled, with live output per process (filter by text, level or node), stop all or one. |
 | Deploy | Push this workspace's `src/` to other machines and build there; compare first to see exactly what changes. |
 | Bags | Recordings on each machine with length, size and topics; pull them here, delete them there once pulled. |
-| Logs | Orchestrator run logs, each package's latest build log, ROS logs, the agent's and the VM autostart log, per machine. |
-| Config | Browse every action and preset of `lance/config`, what a preset inherits and enables, and try `key:=value` arguments without launching. |
+| Logs | Orchestrator run logs, each package's latest build log, ROS logs, the agent's and the VM autostart log, per machine; delete logs, and clean up what piles up on each machine's disk. |
+| Config | Browse and edit every action and preset of `lance/config` (with descriptions), see what a preset inherits and enables, and try `key:=value` arguments without launching. |
+| Settings (gear) | Competition mode, the bandwidth budget, startup options, what the orchestrator remembers, and where its files are. |
 
 ## Machines
 
@@ -53,8 +56,8 @@ entries of the first by `id`):
 
 | File | For |
 |---|---|
-| `<workspace>/src/project/orchestrator/machines.json` | The team's machines: robot, driver stations. Versioned with the code. |
-| `~/.config/orchestrator/machines.json` | Your own machines, e.g. a test rig. |
+| `<workspace>/src/project/orca/machines.json` | The team's machines: robot, driver stations. Versioned with the code. |
+| `~/.config/orca/machines.json` | Your own machines, e.g. a test rig. |
 
 Your own machine is always included as `local`. Example entry pair for a mac
 host and its VM:
@@ -66,7 +69,7 @@ host and its VM:
             "id": "robot-mac",
             "label": "Robot mac host",
             "user": "lance",
-            "host_key_alias": "robot-mac.orchestrator",
+            "host_key_alias": "robot-mac.orca",
             "routes": [{"host": "10.11.11.34"}],
             "vm": {"csm_vm_path": "~/code/csm-vm", "guest": "robot-vm"}
         },
@@ -76,7 +79,7 @@ host and its VM:
             "host": "robot-mac",
             "workspace": "~/lance-ws",
             "user": "lance",
-            "host_key_alias": "robot-vm.orchestrator",
+            "host_key_alias": "robot-vm.orca",
             "routes": [
                 {"host": "10.11.11.48"},
                 {"host": "192.168.18.2", "via": "robot-mac"}
@@ -127,7 +130,7 @@ the machine.
 
 - **Remembered addresses.** While a machine is connected, its agent reports
   its Ethernet and Wi-Fi addresses and MACs. They're kept on your laptop in
-  `~/.config/orchestrator/addresses.json` (not in the team file, so it doesn't
+  `~/.config/orca/addresses.json` (not in the team file, so it doesn't
   change every time DHCP does) and tried after the inventory's routes: first
   wherever the machine's MAC shows up in your laptop's neighbour (ARP) table
   right now (*neighbour* routes), then addresses it had on a network you're on
@@ -152,7 +155,7 @@ the machine.
 ## Scenarios
 
 A scenario is a named setup that starts processes on one or more machines: one
-JSON file per scenario in `<workspace>/src/project/orchestrator/scenarios/`. The
+JSON file per scenario in `<workspace>/src/project/orca/scenarios/`. The
 format is documented at the top of [backend/scenarios.py](backend/scenarios.py);
 the competition one, shortened:
 
@@ -190,8 +193,8 @@ the competition one, shortened:
 - **`set` changes single values** of whatever presets the arguments select,
   which the command line can't do. The orchestrator writes a small overlay next
   to `launch.json` in the machine's `install/` tree (never `src/`), deriving a
-  `orchestrator_<key>` preset from the one that would have been chosen, and adds
-  `json_path:=<overlay> redux:=orchestrator_<key>` to the command. The launch
+  `orca_<key>` preset from the one that would have been chosen, and adds
+  `json_path:=<overlay> redux:=orca_<key>` to the command. The launch
   page shows the overlay and the resulting presets before anything starts. No
   presets need to be added for a new pairing of machines.
 - Processes start in `after` order; if one fails to start, the ones already
@@ -200,15 +203,70 @@ the competition one, shortened:
   last.
 - Runs survive the orchestrator: processes belong to the machine's agent, and a
   restarted orchestrator finds them again with their output. Each process's
-  output is also saved on its machine under `~/.orchestrator/runs/<run>/` (20 MB
+  output is also saved on its machine under `~/.orca/runs/<run>/` (20 MB
   cap per process, removed after 14 days).
 
 
 **Editing in the app:** Launch → *New scenario*, or *Edit* / *Duplicate* on
 a scenario. The editor checks the JSON as you type (with the line of a JSON
 mistake) and previews the launch it makes, with the exact commands, beside
-it. *Save* writes `src/project/orchestrator/scenarios/<id>.json`; commit it to
+it. *Save* writes `src/project/orca/scenarios/<id>.json`; commit it to
 share it. *Delete* removes the file.
+
+## The launch config
+
+The Config page browses `lance/config`: every action and preset, what a
+preset inherits and enables, and what a set of `key:=value` arguments
+resolves to (the same preprocessing `run.sh` does). It also edits it:
+
+- **Edit**, **Derive** (a new preset that inherits from the selected one) and
+  **New preset**: the preset's JSON, checked against the rest of the config
+  as you type (launch-utils must resolve it; selecting an action that doesn't
+  exist is flagged, since launch-utils silently skips it). *Save* writes it
+  into the file that defines it, changing only that preset's text, so the
+  diff shows just your change. New presets go in the file with the action's
+  `pragma:default`.
+- **Delete** refuses while something still names the preset: a preset
+  derived from it, a setup that selects it, the action's default, or a
+  scenario.
+- **Descriptions** of actions and presets (the pencil next to them) are kept
+  in `src/project/orca/presets.json`, not in the presets: launch-utils
+  passes every key of a preset to its node as a ROS parameter (FINDINGS.md
+  L3). They show in the preset list's tooltips and are searched.
+
+Edits change this laptop's workspace: Deploy sends them to the other
+machines, and committing `src/lance` shares them.
+
+## Settings
+
+The gear at the end of the tabs: competition mode, the bandwidth budget's
+numbers and sources, the port and whether a browser opens at start (used when
+the command line doesn't say), what the orchestrator has remembered (sharing
+choices and learned addresses, each can be forgotten) and where all its files
+are. Settings are in `~/.config/orca/settings.json`.
+
+**Light and dark.** The sun / moon button in the top bar switches between a
+dark theme and a high-contrast light one for reading outside on a bright day;
+Settings → Appearance can also make it follow the system. The choice is kept
+by the browser (each laptop picks its own), not in the settings file.
+
+## Cleaning up
+
+Robot disks are small (the VM's is 64 GB), so the Logs page has a **Clean up**
+panel per machine: how much each kind of leftover takes, and a button to
+delete it.
+
+| Kind | What | Kept |
+|---|---|---|
+| Launch overlays | `orca-*.json` in `install/lance/share/lance/config`, written when a launch changes config | Those of running launches. Each is deleted when its launch ends, so these are from crashes or older versions. |
+| Orca run logs | `~/.orca/runs/<run>/` | Runs still going. Deleted after 14 days anyway. |
+| ROS logs | `~/.ros/log` | Files written in the last 10 minutes. |
+| Old build logs | colcon's `log/build_*` | The newest 4 builds (the Logs page reads them). |
+| Old agent folder | `~/.orchestrator`, from before the rename | All of it if an old agent is still running. |
+
+Selecting a log shows it with a **Delete** button (run, build and ROS logs;
+not the agent's own log or the VM's, which are open). The agent checks again
+before deleting, so nothing a running process uses goes.
 
 ## Deploying
 
@@ -329,7 +387,7 @@ machine routes their traffic out through whatever connection it has.
   need to match); anything else has **Add machine**.
 - **Setup, once per machine:** *Install helper* opens a terminal on that
   machine that asks for your sudo password once. It installs a small
-  root-owned program, `/usr/local/sbin/orchestrator-share` (from
+  root-owned program, `/usr/local/sbin/orca-share` (from
   [agent/share_helper.py](agent/share_helper.py)), plus a sudoers rule that
   lets you run just that program without a password, and `dnsmasq-base` if
   it's missing. The program only accepts checked arguments and reads no file a
@@ -337,7 +395,7 @@ machine routes their traffic out through whatever connection it has.
 - **Nothing permanent:** the port's address, NetworkManager leaving the port
   alone, IP forwarding, tagged firewall rules and a DHCP-only dnsmasq all go
   away on *Stop sharing* or a reboot. Leases are kept
-  (`/var/lib/orchestrator-share/`), so a device usually gets the same address
+  (`/var/lib/orca-share/`), so a device usually gets the same address
   back.
 - It refuses to share over Wi-Fi (devices can't join a Wi-Fi adapter that
   isn't an access point) or over the port that is the machine's own internet.
@@ -358,18 +416,21 @@ machine routes their traffic out through whatever connection it has.
                                   └──────────────────────────────┘
 ```
 
-- **Agent** (`agent/orchestrator_agent.py`): one standard-library file. The
-  orchestrator copies it to `~/.orchestrator/agent.py` on each machine (and
+- **Agent** (`agent/orca_agent.py`): one standard-library file. The
+  orchestrator copies it to `~/.orca/agent.py` on each machine (and
   replaces it when it changes), then runs `agent.py attach` over SSH. `attach`
   connects to a long-running daemon on a unix socket, starting it if needed, so
   processes the orchestrator starts can outlive the orchestrator's connection.
-  Logs: `~/.orchestrator/agent.log`.
-- **Orchestrator** (`backend/`): one link per machine (tries routes, installs or
+  Logs: `~/.orca/agent.log`.
+- **The orchestrator** (`backend/`): one link per machine (tries routes, installs or
   updates the agent, polls status, reconnects), plus a small HTTP server that
-  streams state to the browser with Server-Sent Events.
+  streams state to the browser with Server-Sent Events. It has no login, so it
+  only answers its own page: requests from other web pages open in the same
+  browser (another origin, a non-JSON POST, or, when bound to localhost, a
+  Host that isn't a loopback name) are refused.
 - **Config** (`backend/lance_config.py`): reads `lance/config` with
   launch-utils' own preprocessing code from your workspace, so previews match
-  what `run.sh` does.
+  what `run.sh` does. `backend/config_edit.py` edits presets in place.
 - **Web app** (`web/`): Preact + htm loaded as plain ES modules from
   `web/vendor/` (no build step, no internet needed). One module per page in
   `web/js/`; edit and reload.
@@ -381,9 +442,26 @@ cd src/orchestrator && python3 -m unittest discover -s tests -t .
 ```
 
 Standard library only. They cover scenario templates, the inventory, launch
-config overlays (against your workspace's real config), rsync summaries, the
-bandwidth budget, the address book, and a real agent daemon started in a
-temporary directory.
+config overlays and preset editing (against your workspace's real config),
+rsync summaries, the bandwidth budget, the address book, and a real agent
+daemon started in a temporary directory.
+
+GitHub Actions (`.github/workflows/tests.yaml`) runs them on every push and
+pull request to `main`: everything with the system `python3` of Ubuntu 22.04,
+24.04 and 26.04, inside a checkout of lance-2026 so the config tests run
+against its `main`; the agent's tests on Python 3.9 (the oldest a machine may
+have, macOS's built-in one); and a syntax check of every web module.
+
+## Coming from the "orchestrator" names
+
+Before it was called Orca, its files had "orchestrator" in their names. On
+first start Orca moves `~/.config/orchestrator` to `~/.config/orca`. On each
+machine the agent now lives in `~/.orca` (installed by itself on connect);
+`~/.orchestrator` can be deleted once nothing launched before the rename is
+still running there. Internet sharing needs its helper installed again (the
+machine's setup checklist offers it; the installer removes the old
+`orchestrator-share`). The team files moved from `src/project/orchestrator`
+to `src/project/orca`.
 
 ## Status
 
@@ -398,7 +476,7 @@ temporary directory.
 | 6 | Internet sharing over Ethernet (replaces netshare), with devices on the port matched to machines | done |
 | 7 | Add-machine wizard: discovery, host key and SSH key setup, entry from what the machine reports | done |
 | 8 | Setup checklist per machine: checked without sudo, fixed by scripts run in a terminal there | done |
-| 9 | Configurability: **scenario editor done** (new, duplicate, edit, delete; checked as you type, launch previewed); still to do: editing launch-config presets (with descriptions) and an orchestrator settings page | in progress |
+| 9 | Configurability: scenario editor (new, duplicate, edit, delete; checked as you type, launch previewed); launch-config preset editing with descriptions; Settings page | done |
 | 10 | Native macOS processes | |
 | 8b | Network map: the Machines and Network pages merged; networks, ports with live traffic, devices and discovery on one diagram; icons throughout | done |
 

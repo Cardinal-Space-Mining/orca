@@ -109,20 +109,20 @@ def configAddresses(interfaces: list, constants: dict, taken: set) -> dict:
 
 class Discovery:
 
-    def __init__(self, orchestrator):
-        self.orchestrator = orchestrator
+    def __init__(self, orca):
+        self.orca = orca
 
     # --- Finding ---
 
     def knownMachines(self) -> tuple:
-        '''({mac: machine id}, {address: machine id}) for everything the
-        orchestrator already knows.'''
-        book = self.orchestrator.finder.book
+        '''({mac: machine id}, {address: machine id}) for everything
+        Orca already knows.'''
+        book = self.orca.finder.book
         by_mac = {mac: machine_id for machine_id in book.machines
                   for mac in book.macs(machine_id)}
         by_address = {address: machine_id for machine_id, addresses
                       in book.machines.items() for address in addresses}
-        for link in self.orchestrator.links:
+        for link in self.orca.links:
             for interface in (link.state['stats'] or {}).get('interfaces',
                                                              []):
                 for cidr in interface.get('ipv4') or []:
@@ -132,17 +132,17 @@ class Discovery:
         return by_mac, by_address
 
     def networks(self, machine_id: str) -> list:
-        link = self.orchestrator.link(machine_id)
+        link = self.orca.link(machine_id)
         return scanNetworks((link.state['stats'] or {}).get('interfaces', []))
 
     async def scan(self, machine_id: str, cidr: str) -> dict:
-        link = self.orchestrator.link(machine_id)
+        link = self.orca.link(machine_id)
         result = await link.call('net.scan', {
             'cidr': cidr, 'ports': [22], 'timeout_s': 0.8}, timeout_s=90)
-        self.orchestrator.noteScan(machine_id, result)
+        self.orca.noteScan(machine_id, result)
         by_mac, by_address = self.knownMachines()
         local_networks = [interface.network for interface
-                          in self.orchestrator.finder.localInterfaces()]
+                          in self.orca.finder.localInterfaces()]
         for host in result['hosts']:
             host['machine_id'] = by_mac.get(host.get('mac')) \
                 or by_address.get(host['address'])
@@ -164,7 +164,7 @@ class Discovery:
             raise PlanError('"%s" is not a user name' % user)
         via = request.get('via') or None
         if via:
-            jump = self.orchestrator.link(via)
+            jump = self.orca.link(via)
             if jump.connection is None:
                 raise PlanError('%s must be online to reach machines '
                                 'behind it' % jump.machine.label)
@@ -178,7 +178,7 @@ class Discovery:
         key name, and whether another machine already uses the same key
         (cloned VMs keep their original's keys).'''
         route = self.route(request)
-        scanned = await scanHostKeys(route, self.orchestrator.jumpRouteFor)
+        scanned = await scanHostKeys(route, self.orca.jumpRouteFor)
         offered = {keyData(key) for key in scanned['keys']}
         trusted = await knownKeys(scanned['name'])
         if offered & trusted:
@@ -188,7 +188,7 @@ class Discovery:
         else:
             status = 'unknown'
         same_key = []
-        for link in self.orchestrator.links:
+        for link in self.orca.links:
             identity = link.machine.identity()
             if identity and identity != scanned['name'] \
                     and offered & await knownKeys(identity):
@@ -207,7 +207,7 @@ class Discovery:
                 % scanned['name'])
         if scanned['status'] == 'unknown':
             trustHostKeys(scanned['name'], scanned['keys'])
-            self.orchestrator.finder.forgetKnownHosts()
+            self.orca.finder.forgetKnownHosts()
         return {'ok': True}
 
     def keyCommand(self, request: dict) -> list:
@@ -217,7 +217,7 @@ class Discovery:
         route = self.route(request)
         # ssh's options without "ssh -T", as option/value pairs, minus
         # BatchMode: ssh-copy-id has to ask for the password.
-        arguments = sshBaseCommand(route, self.orchestrator.jumpRouteFor)[2:]
+        arguments = sshBaseCommand(route, self.orca.jumpRouteFor)[2:]
         options = []
         for option, value in zip(arguments[::2], arguments[1::2]):
             if value != 'BatchMode=yes':
@@ -244,7 +244,7 @@ class Discovery:
         route = self.route(request)
         machine = Machine(id='new:' + route.host, label=route.host,
                           routes=[route])
-        link = ProbeLink(self.orchestrator, machine)
+        link = ProbeLink(self.orca, machine)
         winner = await link.firstReachable([route])
         if winner is None:
             details = link.state['connection'].get('error_details') or ''
@@ -281,9 +281,9 @@ class Discovery:
                                                 interfaces, survey)}
 
     def suggestEntry(self, request, route, info, interfaces, survey) -> dict:
-        taken = set(self.orchestrator.links_by_id)
+        taken = set(self.orca.links_by_id)
         local_networks = [interface.network for interface
-                          in self.orchestrator.finder.localInterfaces()]
+                          in self.orca.finder.localInterfaces()]
         machine_id = request.get('id') or suggestId(info.get('hostname'),
                                                     taken)
         entry = {
@@ -293,7 +293,7 @@ class Discovery:
             'role': '',
             'user': route.user,
             'host_key_alias': route.host_key_alias
-            or machine_id + '.orchestrator',
+            or machine_id + '.orca',
         }
         if route.via:
             # A VM behind its host: its own network first, the jump last.
@@ -316,9 +316,9 @@ class Discovery:
         csm_vm = survey.get('csm_vm') or []
         if csm_vm and info.get('platform') == 'macos':
             entry['vm'] = {'csm_vm_path': csm_vm[0]['path']}
-        config = self.orchestrator.lanceConfig()
+        config = self.orca.lanceConfig()
         if config is not None:
-            mapped = {name for link in self.orchestrator.links
+            mapped = {name for link in self.orca.links
                       for name in link.machine.config_addresses}
             mapping = configAddresses(interfaces, config.addressConstants(),
                                       mapped)
@@ -331,9 +331,9 @@ class Discovery:
     async def add(self, scope: str, entry: dict) -> dict:
         if not entry.get('id'):
             raise PlanError('the machine needs an id')
-        if entry['id'] in self.orchestrator.links_by_id:
+        if entry['id'] in self.orca.links_by_id:
             raise PlanError('there is already a machine "%s"' % entry['id'])
-        scopes = inventoryScopes(self.orchestrator.workspace_root)
+        scopes = inventoryScopes(self.orca.workspace_root)
         if scope not in scopes:
             raise PlanError('no inventory "%s"' % scope)
         entries = readInventoryRaw(scopes[scope])['machines'] + [entry]
@@ -344,5 +344,5 @@ class Discovery:
                         and host_entry.get('vm') \
                         and not host_entry['vm'].get('guest'):
                     host_entry['vm']['guest'] = entry['id']
-        return await self.orchestrator.saveInventory(scope, entries)
+        return await self.orca.saveInventory(scope, entries)
 

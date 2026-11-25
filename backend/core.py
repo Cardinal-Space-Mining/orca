@@ -1,5 +1,5 @@
 '''
-The orchestrator: owns one MachineLink per machine, the runs it has started,
+Orca: owns one MachineLink per machine, the runs it has started,
 and fans every update out to the browser windows that are listening.
 '''
 
@@ -9,37 +9,43 @@ import asyncio
 import hashlib
 import json
 import os
+import posixpath
+import shlex
 import socket
 from typing import Optional
 
 from .addresses import Finder
 from .inventory import (Route, inventoryScopes, loadInventory,
                         readInventoryRaw, writeInventory)
-from .lance_config import ConfigError, LanceConfig
+from .config_edit import DESCRIPTIONS_RELATIVE_PATH
+from .lance_config import (CONFIG_RELATIVE_PATH, INSTALLED_CONFIG_DIRECTORY,
+                           ConfigError, LanceConfig)
 from .budget import MONITOR_PROCESS_ID, BudgetTracker
 from .deploy import Deployer
 from .discovery import Discovery
 from .link import MachineLink
 from .network_map import DeviceBook, buildNetworkModel
 from .runs import PlanError, Planner, Run, expandHome, newRunId
-from .settings import loadSettings, mergeDefaults, saveSettings
-from .scenarios import loadScenarios, parseScenarioText
+from .settings import (SETTINGS_PATH, loadSettings, mergeDefaults,
+                       saveSettings, validateChanges)
+from .scenarios import (SCENARIO_DIRECTORY, loadScenarios,
+                        parseScenarioText)
 from .setup import Setup
 from .sharing import Sharing
 from .vm import VmController
 
 
-ORCHESTRATOR_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-AGENT_SOURCE_PATH = os.path.join(ORCHESTRATOR_ROOT, 'agent',
-                                 'orchestrator_agent.py')
-MONITOR_SOURCE_PATH = os.path.join(ORCHESTRATOR_ROOT, 'backend',
+ORCA_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+AGENT_SOURCE_PATH = os.path.join(ORCA_ROOT, 'agent',
+                                 'orca_agent.py')
+MONITOR_SOURCE_PATH = os.path.join(ORCA_ROOT, 'backend',
                                    'ros_monitor.py')
 SUBSCRIBER_QUEUE_SIZE = 5000
 NETWORK_PUBLISH_PERIOD_S = 2.0
 MAX_FINISHED_RUNS = 20
 
 
-class Orchestrator:
+class Orca:
 
     def __init__(self, machines: list, workspace_root: Optional[str],
                  inventory_paths: list):
@@ -109,7 +115,7 @@ class Orchestrator:
             try:
                 model = self.networkModel()
             except Exception as error:  # keep the loop alive; show why
-                print('[ORCHESTRATOR]: network map failed: %r' % error,
+                print('[ORCA]: network map failed: %r' % error,
                       flush=True)
                 continue
             encoded = json.dumps(model, sort_keys=True)
@@ -123,14 +129,14 @@ class Orchestrator:
         return self.links_by_id[machine_id].jumpRoute()
 
     def referenceHead(self) -> Optional[str]:
-        '''Commit of the orchestrator's own workspace (what previews are based
+        '''Commit of Orca's own workspace (what previews are based
         on).'''
         local = self.links_by_id.get('local')
         workspace = local.state['workspace'] if local else None
         return workspace.get('head') if workspace else None
 
     def referenceFingerprint(self) -> Optional[str]:
-        '''Code fingerprint of the orchestrator's own workspace.'''
+        '''Code fingerprint of Orca's own workspace.'''
         local = self.links_by_id.get('local')
         workspace = local.state['workspace'] if local else None
         return workspace.get('fingerprint') if workspace else None
@@ -173,13 +179,14 @@ class Orchestrator:
 
     def snapshot(self) -> dict:
         return {
-            'orchestrator': {
+            'orca': {
                 'hostname': socket.gethostname(),
                 'workspace': self.workspace_root,
                 'inventory_paths': [
                     {'path': path, 'exists': os.path.isfile(path)}
                     for path in self.inventory_paths],
                 'agent_hash': self.agent_hash,
+                'files': self.files(),
             },
             'machines': [link.snapshot() for link in self.links],
             'runs': [run.snapshot() for run in self.runs.values()],
@@ -242,6 +249,7 @@ class Orchestrator:
     # --- Settings ---
 
     async def updateSettings(self, changes: dict) -> dict:
+        validateChanges(changes)
         was_competition = self.settings['competition_mode']
         self.settings = mergeDefaults(changes, self.settings)
         saveSettings(self.settings)
@@ -251,6 +259,43 @@ class Orchestrator:
                                    for link in self.links))
         self.budget.publish()
         return self.settings
+
+    def forget(self, what: str, machine_id: str) -> dict:
+        """Forget a machine's remembered sharing choices or learned
+        addresses (the Settings page)."""
+        if what == 'sharing':
+            self.settings['sharing'].pop(machine_id, None)
+            saveSettings(self.settings)
+            self.publish('settings', self.settings)
+        elif what == 'addresses':
+            self.finder.book.forget(machine_id)
+            self.finder.book.saveSoon(asyncio.get_running_loop())
+            link = self.links_by_id.get(machine_id)
+            if link:
+                link.publish()
+        else:
+            raise PlanError('nothing called "%s" to forget' % what)
+        return {'ok': True}
+
+    def files(self) -> list:
+        """The files Orca reads and writes, for the Settings
+        page."""
+        workspace = self.workspace_root
+        entries = [
+            ('Settings (this page)', SETTINGS_PATH),
+            ('Learned machine addresses', self.finder.book.path),
+        ] + [('Machine inventory (%s)' % scope, path) for scope, path
+             in sorted(inventoryScopes(workspace).items())]
+        if workspace:
+            entries += [
+                ('Scenarios', os.path.join(workspace, SCENARIO_DIRECTORY)),
+                ('Preset descriptions', os.path.join(
+                    workspace, DESCRIPTIONS_RELATIVE_PATH)),
+                ('Launch config', os.path.join(workspace,
+                                               CONFIG_RELATIVE_PATH)),
+            ]
+        return [{'label': label, 'path': path,
+                 'exists': os.path.exists(path)} for label, path in entries]
 
     # --- net_adapter monitor (for the bandwidth budget) ---
 
@@ -272,14 +317,15 @@ class Orchestrator:
         with open(MONITOR_SOURCE_PATH) as file:
             source = file.read()
         script = await link.call('file.write', {
-            'path': '~/.orchestrator/ros_monitor.py', 'content': source})
-        command = ('source /opt/ros/%s/setup.bash && source %s/install/'
-                   'setup.bash && ' % (distro, root))
+            'path': '~/.orca/ros_monitor.py', 'content': source})
+        command = 'source %s && source %s && ' % (
+            shlex.quote('/opt/ros/%s/setup.bash' % distro),
+            shlex.quote(root + '/install/setup.bash'))
         if self.settings['budget']['monitor_local_dds']:
             command += ('export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp '
-                        'CYCLONEDDS_URI=file://%s/src/project/cyclonedds.xml'
-                        ' && ' % root)
-        command += 'exec python3 -u ' + script['path']
+                        'CYCLONEDDS_URI=%s && ' % shlex.quote(
+                            'file://%s/src/project/cyclonedds.xml' % root))
+        command += 'exec python3 -u ' + shlex.quote(script['path'])
         await link.call('process.start', {
             'process_id': MONITOR_PROCESS_ID, 'label': 'Bandwidth monitor',
             'argv': ['bash', '-c', command], 'cwd': root,
@@ -400,8 +446,8 @@ class Orchestrator:
             del self.runs[run_id]
 
     def onProcessState(self, machine_id: str, record: dict):
-        '''Route an agent's process update to its run, recreating runs the
-        orchestrator doesn't know (it restarted while they were running).'''
+        '''Route an agent's process update to its run, recreating runs
+        Orca doesn't know (it restarted while they were running).'''
         if record['process_id'] == MONITOR_PROCESS_ID:
             self.onMonitorState(machine_id, record)
             return
@@ -432,6 +478,32 @@ class Orchestrator:
             'path': path, 'max_bytes': max_bytes,
             'workspace': link.machine.workspace}, timeout_s=60.0)
 
+    async def deleteLog(self, machine_id: str, path: str) -> dict:
+        link = self.link(machine_id)
+        return await link.call('logs.delete', {
+            'path': path, 'workspace': link.machine.workspace})
+
+    # --- Cleanup ---
+
+    def cleanupParams(self, link) -> dict:
+        workspace = link.machine.workspace
+        return {'workspace': workspace,
+                'overlay_directory': posixpath.join(
+                    workspace, INSTALLED_CONFIG_DIRECTORY.replace(os.sep, '/'))
+                if workspace else None}
+
+    async def cleanupScan(self, machine_id: str) -> dict:
+        '''What could be deleted on a machine (Logs page), by category.'''
+        link = self.link(machine_id)
+        return await link.call('cleanup.scan', self.cleanupParams(link),
+                               timeout_s=60.0)
+
+    async def cleanup(self, machine_id: str, categories: list) -> dict:
+        link = self.link(machine_id)
+        return await link.call('cleanup.run', dict(
+            self.cleanupParams(link), categories=list(categories)),
+            timeout_s=120.0)
+
     async def stopProcess(self, machine_id: str, process_id: str):
         await self.link(machine_id).call('process.stop',
                                          {'process_id': process_id})
@@ -439,7 +511,7 @@ class Orchestrator:
     async def processOutput(self, machine_id: str, process_id: str,
                             from_line: int, refresh: bool = False) -> dict:
         '''Buffered output. With refresh, first fetch what the agent has that
-        the orchestrator didn't stream (competition mode pauses streaming).'''
+        Orca didn't stream (competition mode pauses streaming).'''
         link = self.link(machine_id)
         mirror = link.processes.get(process_id)
         if mirror is None:

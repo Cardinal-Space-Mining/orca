@@ -2,7 +2,7 @@
 
 What a robot computer, VM host or driver station needs before the orchestrator
 can manage it. Do it once per machine (and the SSH key part once per operator
-laptop). Machines are listed in `src/project/orchestrator/machines.json`; see
+laptop). Machines are listed in `src/project/orca/machines.json`; see
 the [README](../README.md#machines).
 
 ## Every machine
@@ -38,11 +38,11 @@ on macOS System Settings → General → Sharing → Remote Login.
    ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub   # on the machine itself
    ```
    Team machines use one key name for all their addresses (e.g.
-   `robot-vm.orchestrator`), so this happens once per machine per laptop, not
+   `robot-vm.orca`), so this happens once per machine per laptop, not
    once per address.
 
 Nothing else is installed by hand: the orchestrator copies its agent to
-`~/.orchestrator/agent.py` and keeps it up to date.
+`~/.orca/agent.py` and keeps it up to date.
 
 ## Ubuntu machines (robot VM, LattePandas, driver stations)
 
@@ -58,9 +58,9 @@ Nothing else is installed by hand: the orchestrator copies its agent to
 - **Internet sharing** (driver stations, or any machine that shares its
   internet over Ethernet): click one of its Ethernet ports on the Network map
   (or Network → List → Internet sharing) → *Install helper* on that machine, and type your sudo password in the terminal that opens. It
-  installs `/usr/local/sbin/orchestrator-share`, the sudoers rule
-  `/etc/sudoers.d/orchestrator-share` and `dnsmasq-base`. To remove it:
-  `sudo rm /usr/local/sbin/orchestrator-share /etc/sudoers.d/orchestrator-share`.
+  installs `/usr/local/sbin/orca-share`, the sudoers rule
+  `/etc/sudoers.d/orca-share` and `dnsmasq-base`. To remove it:
+  `sudo rm /usr/local/sbin/orca-share /etc/sudoers.d/orca-share`.
 
 ### Robot computers: CAN without a password prompt
 

@@ -1,8 +1,8 @@
 '''
 Deploying code and pulling bags (what sync.sh does, plus builds).
 
-Pushes copy the orchestrator's workspace to other machines with rsync over the
-same SSH route the orchestrator uses, with sync.sh's `--ws` rules: everything
+Pushes copy Orca's workspace to other machines with rsync over the
+same SSH route Orca uses, with sync.sh's `--ws` rules: everything
 under src/ (including .git, so the copy reports the same commit), never
 csm-sim, and files removed here are removed there. A build can follow on the
 target: `./src/build.sh <flags>` with the ROS distro the workspace was built
@@ -42,18 +42,18 @@ MAX_LISTED_CHANGES = 400
 
 class Deployer:
 
-    def __init__(self, orchestrator):
-        self.orchestrator = orchestrator
+    def __init__(self, orca):
+        self.orca = orca
 
     # --- Machines and paths ---
 
     def localWorkspace(self) -> str:
-        if not self.orchestrator.workspace_root:
-            raise PlanError("the orchestrator isn't inside a workspace")
-        return self.orchestrator.workspace_root
+        if not self.orca.workspace_root:
+            raise PlanError("Orca isn't inside a workspace")
+        return self.orca.workspace_root
 
     def target(self, machine_id: str):
-        link = self.orchestrator.link(machine_id)
+        link = self.orca.link(machine_id)
         if link.machine.is_local:
             raise PlanError('%s is this machine' % link.machine.label)
         if link.connection is None or link.active_route is None:
@@ -67,10 +67,10 @@ class Deployer:
         return expandHome(link.machine.workspace, link.state['info'])
 
     def rsyncShell(self, link) -> str:
-        '''The -e command for rsync: the orchestrator's SSH options for the
+        '''The -e command for rsync: Orca's SSH options for the
         route the machine is connected on.'''
         return shlex.join(sshBaseCommand(link.active_route,
-                                         self.orchestrator.jumpRouteFor))
+                                         self.orca.jumpRouteFor))
 
     def remotePath(self, link, path: str) -> str:
         return '%s:%s' % (link.active_route.target(), path)
@@ -178,7 +178,7 @@ class Deployer:
             raise PlanError('choose at least one machine')
         if push:
             # rsync runs on this machine's agent
-            self.orchestrator.link('local')
+            self.orca.link('local')
         entries = []
         for machine_id in machine_ids:
             link = self.target(machine_id)
@@ -204,7 +204,7 @@ class Deployer:
 
     def deploy(self, request: dict) -> Run:
         plan = self.plan(request)
-        names = ', '.join(self.orchestrator.link(machine_id).machine.label
+        names = ', '.join(self.orca.link(machine_id).machine.label
                           for machine_id in request['machine_ids'])
         verb = {(True, True): 'Deploy to', (True, False): 'Push to',
                 (False, True): 'Build on'}[(request.get('push', True),
@@ -212,9 +212,9 @@ class Deployer:
         return self.startRun('%s %s' % (verb, names), plan, 'deploy')
 
     def startRun(self, label: str, plan: dict, kind: str) -> Run:
-        run = Run(self.orchestrator, newRunId(), label, None, plan, kind=kind)
-        self.orchestrator.runs[run.run_id] = run
-        self.orchestrator.forgetOldRuns()
+        run = Run(self.orca, newRunId(), label, None, plan, kind=kind)
+        self.orca.runs[run.run_id] = run
+        self.orca.forgetOldRuns()
         run.start()
         return run
 
@@ -232,7 +232,7 @@ class Deployer:
         return sizes
 
     async def listBags(self, machine_id: str) -> dict:
-        link = self.orchestrator.link(machine_id)
+        link = self.orca.link(machine_id)
         if not link.machine.workspace:
             raise PlanError('%s has no workspace' % link.machine.label)
         listing = await link.call('bags.list',
@@ -278,7 +278,7 @@ class Deployer:
         if bag['pulled'] != 'yes':
             raise PlanError("%s hasn't been pulled completely; pull it first"
                             % name)
-        link = self.orchestrator.link(machine_id)
+        link = self.orca.link(machine_id)
         return await link.call('bags.delete', {
             'workspace': link.machine.workspace, 'name': name})
 

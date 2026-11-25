@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 '''
-orchestrator agent.
+Orca agent.
 
-Runs on every machine the orchestrator manages: the robot's mac host, its
-Ubuntu VM, client laptops, and the orchestrator's own machine. It is one file
-that uses only the standard library, so the orchestrator can copy it over SSH
+Runs on every machine Orca manages: the robot's mac host, its
+Ubuntu VM, client laptops, and Orca's own machine. It is one file
+that uses only the standard library, so Orca can copy it over SSH
 and run it with any Python 3.9+, including macOS's /usr/bin/python3.
 
 Modes (first command-line argument):
     daemon   Long-running server. Answers requests on a unix socket and will
-             own the processes the orchestrator starts, so they outlive the
-             orchestrator's connection.
+             own the processes Orca starts, so they outlive
+             Orca's connection.
     attach   Bridges stdin/stdout to the daemon's socket, starting the daemon
-             first if it isn't running. The orchestrator runs this over SSH, so
+             first if it isn't running. Orca runs this over SSH, so
              the agent never opens a network port and SSH keys are the only
              authentication.
-    hash     Prints the hash of this file (the orchestrator compares it with
+    hash     Prints the hash of this file (Orca compares it with
              its copy).
 
 Protocol: one JSON object per line, in both directions.
@@ -59,9 +59,9 @@ import time
 PROTOCOL_VERSION = 2
 
 AGENT_PATH = os.path.abspath(__file__)
-# ORCHESTRATOR_AGENT_DIR lets tests run an agent beside the real one.
-AGENT_DIR = os.environ.get('ORCHESTRATOR_AGENT_DIR') \
-    or os.path.join(os.path.expanduser('~'), '.orchestrator')
+# ORCA_AGENT_DIR lets tests run an agent beside the real one.
+AGENT_DIR = os.environ.get('ORCA_AGENT_DIR') \
+    or os.path.join(os.path.expanduser('~'), '.orca')
 SOCKET_PATH = os.path.join(AGENT_DIR, 'agent.sock')
 # Unix socket paths are limited to ~104 bytes, so the daemon and `attach`
 # both work from AGENT_DIR and use this relative name.
@@ -103,8 +103,12 @@ COMMAND_TIMEOUT_S = 5.0
 
 
 def fileHash(path):
-    with open(path, 'rb') as file:
-        return hashlib.sha256(file.read()).hexdigest()[:12]
+    '''Short sha256 of a file, or None if it can't be read.'''
+    try:
+        with open(path, 'rb') as file:
+            return hashlib.sha256(file.read()).hexdigest()[:12]
+    except OSError:
+        return None
 
 
 # Hash of the code this process is running; the file on disk may be newer.
@@ -631,8 +635,8 @@ def workspaceStatus(path):
 
 
 def workspaceRefs(path):
-    '''Every branch, tag and remote ref of <path>/src with its commit, so the
-    orchestrator can tell whether a push would lose commits that only exist
+    '''Every branch, tag and remote ref of <path>/src with its commit, so
+    Orca can tell whether a push would lose commits that only exist
     here.'''
     repository = os.path.join(os.path.expanduser(path), 'src')
     output = git(repository, 'for-each-ref',
@@ -646,7 +650,7 @@ def workspaceRefs(path):
     for line in stashes.splitlines():
         sha, _, name = line.partition(' ')
         refs[name] = sha
-    # Refs kept as files survive a push (the orchestrator never deletes inside
+    # Refs kept as files survive a push (Orca never deletes inside
     # .git); refs only in packed-refs don't, since that file gets replaced.
     git_directory = git(repository, 'rev-parse', '--absolute-git-dir') or ''
     loose = [name for name in refs if name.startswith('stash@')
@@ -749,12 +753,14 @@ def installedRosDistros():
 
 # --- Setup checklist ------------------------------------------------------------
 
-# One-time setup a machine needs, checked without sudo. The orchestrator
+# One-time setup a machine needs, checked without sudo. Orca
 # offers a fix for most items (a script run in a terminal, where sudo can ask
 # for a password).
 
 EEE_DRIVERS = ('r8152',)  # Realtek RTL8153/8156 USB Ethernet
-EEE_UDEV_RULE = '/etc/udev/rules.d/70-orchestrator-eee.rules'
+EEE_UDEV_RULE = '/etc/udev/rules.d/70-orca-eee.rules'
+# Installed before the rename to Orca; does the same.
+OLD_EEE_UDEV_RULE = '/etc/udev/rules.d/70-orchestrator-eee.rules'
 CAN_COMMANDS = ('/usr/bin/slcand', 'link set can0 up')
 VM_COMMANDS = ('/opt/homebrew/bin/qemu-system-aarch64',
                '/opt/homebrew/bin/socat')
@@ -801,7 +807,7 @@ def setupChecks(options):
             linger = (runCommand(['loginctl', 'show-user', user, '-p',
                                   'Linger', '--value']) or '').strip()
             check('linger', 'Lingering', 'ok' if linger == 'yes' else 'todo',
-                  'Processes the orchestrator starts keep running when SSH '
+                  'Processes Orca starts keep running when SSH '
                   'sessions end.' if linger == 'yes' else
                   'Off: systemd may stop processes started over SSH when the '
                   'session ends.')
@@ -816,10 +822,11 @@ def setupChecks(options):
         check('avahi', 'mDNS name', 'ok' if avahi else 'optional',
               'Answers to %s.local.' % hostname if avahi else
               'avahi-daemon isn\'t running: %s.local doesn\'t resolve '
-              '(the orchestrator finds it anyway).' % hostname)
+              '(Orca finds it anyway).' % hostname)
         adapters = eeeInterfaces()
         if adapters:
-            has_rule = os.path.exists(EEE_UDEV_RULE)
+            has_rule = os.path.exists(EEE_UDEV_RULE) \
+                or os.path.exists(OLD_EEE_UDEV_RULE)
             on = [adapter['name'] for adapter in adapters
                   if adapter['eee_on']]
             ok = has_rule and not on
@@ -838,7 +845,7 @@ def setupChecks(options):
                   'ok' if allowed else 'todo',
                   'run.sh --canbus can bring up CAN.' if allowed else
                   'sudo asks for a password for slcand / ip link, so '
-                  'run.sh --canbus fails when started from the orchestrator.')
+                  'run.sh --canbus fails when started from Orca.')
         if 'sharing' in tags or options.get('is_local'):
             helper_hash = fileHash(SHARE_HELPER_PATH)
             current = helper_hash and helper_hash == options.get(
@@ -863,7 +870,7 @@ def setupChecks(options):
                       'ok' if current else 'todo',
                       'Supports --overlay and the serial console.' if current
                       else 'An older run-vm.sh: starting the VM from the '
-                      'orchestrator can stop at a question, and there is no '
+                      'orca can stop at a question, and there is no '
                       'serial console.')
             tools = [path for path in VM_COMMANDS if not os.path.exists(path)]
             check('vm-tools', 'QEMU and socat', 'ok' if not tools else 'todo',
@@ -874,7 +881,7 @@ def setupChecks(options):
                   'ok' if allowed else 'todo',
                   'run-vm.sh can start and stop the VM.' if allowed else
                   'sudo asks for a password for QEMU / socat, so the VM '
-                  'can\'t be started from the orchestrator.')
+                  'can\'t be started from Orca.')
     if options.get('workspace'):
         distros = installedRosDistros()
         check('ros', 'ROS 2', 'ok' if distros else 'todo',
@@ -961,20 +968,12 @@ def machineSurvey(interfaces):
 # --- Internet sharing ---------------------------------------------------------
 
 # Sharing this machine's internet over an Ethernet port goes through a small
-# root-owned helper (share_helper.py, installed by the orchestrator with a
+# root-owned helper (share_helper.py, installed by Orca with a
 # sudoers rule), so it works without a password but can't do anything else.
-SHARE_HELPER_PATH = '/usr/local/sbin/orchestrator-share'
+SHARE_HELPER_PATH = '/usr/local/sbin/orca-share'
 SHARE_SUDO_CHECK_S = 60.0
 SHARE_COMMAND_TIMEOUT_S = 40.0
 share_sudo_check = {'checked_s': 0.0, 'allowed': False, 'hash': None}
-
-
-def fileHash(path):
-    try:
-        with open(path, 'rb') as file:
-            return hashlib.sha256(file.read()).hexdigest()[:12]
-    except OSError:
-        return None
 
 
 def shareSudoAllowed(helper_hash):
@@ -1322,6 +1321,14 @@ def logRoots(workspace):
     return [os.path.realpath(root) for root in roots]
 
 
+def modifiedTime(path):
+    '''mtime, or 0 for a file that just went away (ROS rotates logs).'''
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return 0.0
+
+
 def listLogs(workspace):
     '''Logs worth looking at on this machine, newest first per group.'''
     entries = []
@@ -1330,13 +1337,13 @@ def listLogs(workspace):
         process = os.path.basename(path)[:-len('.log')]
         if process.startswith(run + '.'):
             process = process[len(run) + 1:]
-        entries.append(logEntry(path, 'Orchestrator runs',
+        entries.append(logEntry(path, 'Orca runs',
                                 '%s  %s' % (run, process)))
     if workspace:
         entries.extend(buildLogs(workspace))
     ros_logs = glob.glob(os.path.join(ROS_LOG_DIRECTORY, '*.log')) + glob.glob(
         os.path.join(ROS_LOG_DIRECTORY, '*', 'launch.log'))
-    ros_logs.sort(key=lambda path: os.stat(path).st_mtime, reverse=True)
+    ros_logs.sort(key=modifiedTime, reverse=True)
     for path in ros_logs[:NUM_RECENT_ROS_LOGS]:
         label = os.path.relpath(path, ROS_LOG_DIRECTORY)
         entries.append(logEntry(path, 'ROS', label))
@@ -1365,6 +1372,207 @@ def readLog(path, max_bytes, workspace):
     return {'path': path, 'size_bytes': size, 'truncated': size > max_bytes,
             'text': data.decode('utf-8', errors='replace')}
 
+
+
+def deleteLog(path, workspace, in_use):
+    '''Delete one log file from the known log locations (not the agent's
+    own log, which is open, nor a running process's), then any folders it
+    leaves empty up to the log root.'''
+    real_path = os.path.realpath(os.path.expanduser(path))
+    if real_path in (os.path.realpath(LOG_PATH), os.path.realpath(VM_LOG_PATH)):
+        raise ValueError("this log is in use and can't be deleted")
+    # Not every log root: ~/.orca also holds the agent itself.
+    roots = [os.path.realpath(RUNS_DIR), os.path.realpath(ROS_LOG_DIRECTORY)]
+    if workspace:
+        roots.append(os.path.realpath(os.path.join(
+            os.path.expanduser(workspace), 'log')))
+    inside = [root for root in roots if real_path.startswith(root + os.sep)]
+    is_old_agent_log = real_path == os.path.realpath(LOG_PATH + '.1')
+    if not (inside or is_old_agent_log) or not os.path.isfile(real_path):
+        raise ValueError('not a log Orca can delete: ' + path)
+    if real_path in in_use:
+        raise ValueError('its process is still running')
+    size = os.path.getsize(real_path)
+    os.unlink(real_path)
+    if inside:
+        removeEmptyParents(os.path.dirname(real_path), inside[0])
+    return {'deleted': path, 'bytes': size}
+
+
+def removeEmptyParents(directory, root):
+    while directory.startswith(root + os.sep):
+        try:
+            os.rmdir(directory)  # only succeeds when empty
+        except OSError:
+            return
+        directory = os.path.dirname(directory)
+
+
+
+# --- Cleanup ------------------------------------------------------------------
+
+
+
+# What builds up on a machine over time, for the Logs page's cleanup panel.
+# Each category lists paths that can go; anything a running process uses is
+# left alone.
+OLD_AGENT_DIR = os.path.join(os.path.expanduser('~'), '.orchestrator')
+RECENT_FILE_S = 10 * 60
+NUM_KEPT_BUILDS = NUM_RECENT_BUILDS
+
+
+def pathSize(path):
+    '''Bytes in a file or folder (not following links).'''
+    if os.path.islink(path):
+        return 0
+    if not os.path.isdir(path):
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+    total = 0
+    for root, _, names in os.walk(path):
+        for name in names:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def removePath(path):
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.unlink(path)
+
+
+def isLocked(lock_path):
+    '''True if a daemon holds this lock file (an agent still running).'''
+    try:
+        with open(lock_path, 'a') as file:
+            fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(file, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+
+
+def overlayFiles(overlay_directory, in_use):
+    '''Launch overlays Orca wrote that no running process uses (they're
+    removed when their process exits; these are from crashes and older
+    Orca versions), and half-written temporary files.'''
+    if not overlay_directory:
+        return []
+    directory = os.path.expanduser(overlay_directory)
+    found = glob.glob(os.path.join(directory, 'orca-*.json')) + glob.glob(
+        os.path.join(directory, '*.tmp')) + glob.glob(
+        os.path.join(AGENT_DIR, '*.tmp'))
+    return [path for path in found if os.path.realpath(path) not in in_use]
+
+
+def runLogDirectories(in_use):
+    '''Orca run logs whose processes have all ended.'''
+    found = []
+    for path in glob.glob(os.path.join(RUNS_DIR, '*')):
+        real = os.path.realpath(path)
+        if os.path.isdir(path) and not any(
+                used.startswith(real + os.sep) for used in in_use):
+            found.append(path)
+    return found
+
+
+def rosLogEntries():
+    '''Everything in ~/.ros/log except what was written in the last few
+    minutes (it may belong to something running).'''
+    cutoff_s = time.time() - RECENT_FILE_S
+    return [path for path in glob.glob(os.path.join(ROS_LOG_DIRECTORY, '*'))
+            if not os.path.islink(path) and modifiedTime(path) < cutoff_s]
+
+
+def oldBuildLogs(workspace):
+    '''colcon's log/build_* folders, all but the newest few (the Logs page
+    reads each package's newest log from those).'''
+    if not workspace:
+        return []
+    builds = sorted(glob.glob(os.path.join(
+        os.path.expanduser(workspace), 'log', 'build_*')), reverse=True)
+    return [path for path in builds[NUM_KEPT_BUILDS:]
+            if os.path.isdir(path) and not os.path.islink(path)]
+
+
+def oldAgentFolder():
+    '''~/.orchestrator, from before Orca was renamed (old run logs and the
+    old agent), unless an old agent daemon is still running there.'''
+    if not os.path.isdir(OLD_AGENT_DIR) \
+            or os.path.realpath(OLD_AGENT_DIR) == os.path.realpath(AGENT_DIR):
+        return []
+    if isLocked(os.path.join(OLD_AGENT_DIR, 'daemon.lock')):
+        return []
+    return [OLD_AGENT_DIR]
+
+
+CLEANUP_CATEGORIES = [
+    ('overlays', 'Launch overlays',
+     'Config overlays from launches that have ended, and half-written files.'),
+    ('run_logs', 'Orca run logs',
+     'Output of runs that have ended (deleted after 14 days anyway).'),
+    ('ros_logs', 'ROS logs',
+     '~/.ros/log, except files written in the last 10 minutes.'),
+    ('build_logs', 'Old build logs',
+     'colcon build logs, except the newest %d builds.' % NUM_KEPT_BUILDS),
+    ('old_agent', 'Old agent folder',
+     '~/.orchestrator, left from before Orca was renamed.'),
+]
+
+
+def cleanupPaths(category, params, in_use):
+    workspace = params.get('workspace')
+    if category == 'overlays':
+        return overlayFiles(params.get('overlay_directory'), in_use)
+    if category == 'run_logs':
+        return runLogDirectories(in_use)
+    if category == 'ros_logs':
+        return rosLogEntries()
+    if category == 'build_logs':
+        return oldBuildLogs(workspace)
+    if category == 'old_agent':
+        return oldAgentFolder()
+    raise ValueError('nothing called %s to clean up' % category)
+
+
+def cleanupScan(params, in_use):
+    categories = []
+    for category, label, description in CLEANUP_CATEGORIES:
+        paths = cleanupPaths(category, params, in_use)
+        categories.append({
+            'id': category, 'label': label, 'description': description,
+            'count': len(paths), 'bytes': sum(map(pathSize, paths))})
+    root = os.path.expanduser(params.get('workspace') or '~')
+    usage = shutil.disk_usage(root if os.path.isdir(root) else '/')
+    return {'categories': categories,
+            'disk': {'free_bytes': usage.free, 'total_bytes': usage.total}}
+
+
+def cleanup(params, in_use):
+    '''Delete what the given categories list now (looked up again, so
+    nothing that started being used since the scan goes).'''
+    removed = {}
+    errors = []
+    for category in params.get('categories') or []:
+        count = 0
+        size = 0
+        for path in cleanupPaths(category, params, in_use):
+            path_size = pathSize(path)
+            try:
+                removePath(path)
+            except OSError as error:
+                errors.append('%s: %s' % (path, error.strerror or error))
+                continue
+            count += 1
+            size += path_size
+        removed[category] = {'count': count, 'bytes': size}
+    return {'removed': removed, 'errors': errors[:20]}
 
 
 # --- Virtual machine (macOS host) ---------------------------------------------
@@ -1502,7 +1710,7 @@ def removeOldRunLogs():
 
 
 class SupervisedProcess:
-    '''One process started for the orchestrator. Runs on a pseudo-terminal so
+    '''One process started for Orca. Runs on a pseudo-terminal so
     programs line-buffer and colour their output as they would in a terminal,
     in its own process group so stopping it reaches every child (like Ctrl-C).
 
@@ -1517,6 +1725,9 @@ class SupervisedProcess:
         self.cwd = os.path.expanduser(params.get('cwd') or '~')
         self.meta = params.get('meta') or {}
         self.extra_env = params.get('env') or {}
+        # Files written for this process only (its launch overlay).
+        self.remove_on_exit = [os.path.expanduser(path) for path
+                               in params.get('remove_on_exit') or []]
 
         # --- Lifecycle ---
         self.popen = None
@@ -1636,7 +1847,7 @@ class SupervisedProcess:
         self.log_bytes += len(data)
         self.log_file.write(data)
         if self.log_bytes >= MAX_PROCESS_LOG_BYTES:
-            self.log_file.write(b'\n[orchestrator: log size limit reached; '
+            self.log_file.write(b'\n[orca: log size limit reached; '
                                 b'further output is not saved]\n')
         self.log_file.flush()
 
@@ -1697,8 +1908,13 @@ class SupervisedProcess:
             self.stop_task.cancel()
         summary = ('exited with code %d' % return_code if return_code >= 0
                    else 'killed by %s' % self.exit_signal)
-        self.writeLog(('\n[orchestrator: process %s]\n' % summary).encode())
+        self.writeLog(('\n[orca: process %s]\n' % summary).encode())
         self.log_file.close()
+        for path in self.remove_on_exit:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
         self.manager.broadcastState(self)
 
     def output(self, from_line):
@@ -1948,7 +2164,7 @@ class TerminalManager:
 
 
 class ClientSession:
-    '''One connected client (normally one orchestrator, through `attach`).'''
+    '''One connected client (normally one orca, through `attach`).'''
 
     def __init__(self, daemon, reader, writer):
         self.daemon = daemon
@@ -1959,7 +2175,7 @@ class ClientSession:
         self.request_tasks = set()
         # Output is only sent to clients that ask for it (see process.watch),
         # so a status-only client costs almost no bandwidth: all processes,
-        # or only some (competition mode watches just the orchestrator's
+        # or only some (competition mode watches just Orca's
         # monitor).
         self.watches_output = False
         self.watched_ids = set()
@@ -2073,11 +2289,14 @@ class Daemon:
             'bags.delete': self.methodBagsDelete,
             'logs.list': self.methodLogsList,
             'logs.read': self.methodLogsRead,
+            'logs.delete': self.methodLogsDelete,
+            'cleanup.scan': self.methodCleanupScan,
+            'cleanup.run': self.methodCleanupRun,
             'agent.shutdown': self.methodShutdown,
         }
 
     def isIdle(self):
-        '''True when no orchestrator-started processes are running, so the
+        '''True when no Orca-started processes are running, so the
         daemon can be restarted (e.g. to update it) without disturbing
         anything.'''
         return self.processes.numRunning() == 0
@@ -2136,7 +2355,7 @@ class Daemon:
 
     async def methodProcessStart(self, session, params):
         '''params: process_id, argv, cwd, env, label, meta (returned as is;
-        the orchestrator keeps its run information there).'''
+        Orca keeps its run information there).'''
         return self.processes.start(params)
 
     async def methodProcessStop(self, session, params):
@@ -2250,6 +2469,29 @@ class Daemon:
         return await self.inThread(
             readLog, params['path'], params.get('max_bytes', 1024 * 1024),
             params.get('workspace'))
+
+    def pathsInUse(self):
+        '''Files running processes use: their run logs and overlays.'''
+        paths = set()
+        for process in self.processes.processes.values():
+            if process.isRunning():
+                paths.add(os.path.realpath(process.log_path))
+                paths.update(os.path.realpath(path)
+                             for path in process.remove_on_exit)
+                paths.update(os.path.realpath(os.path.expanduser(
+                    argument.split(':=', 1)[1])) for argument in process.argv
+                    if argument.startswith('json_path:='))
+        return paths
+
+    async def methodLogsDelete(self, session, params):
+        return await self.inThread(deleteLog, params['path'],
+                                   params.get('workspace'), self.pathsInUse())
+
+    async def methodCleanupScan(self, session, params):
+        return await self.inThread(cleanupScan, params, self.pathsInUse())
+
+    async def methodCleanupRun(self, session, params):
+        return await self.inThread(cleanup, params, self.pathsInUse())
 
     async def methodShutdown(self, session, params):
         if not self.isIdle() and not params.get('force'):

@@ -728,7 +728,7 @@ function SidePanel({ selection, state, model, now, onSelect, placement,
 // Where the details panel goes: below the map on ordinary screens (the map
 // is wide and short), beside it on very wide ones; the panel's header can
 // switch it, and that choice is remembered.
-const PLACEMENT_KEY = 'orchestrator.map-panel';
+const PLACEMENT_KEY = 'orca.map-panel';
 
 function defaultPlacement() {
     const saved = window.localStorage.getItem(PLACEMENT_KEY);

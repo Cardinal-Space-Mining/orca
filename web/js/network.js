@@ -14,7 +14,7 @@ import { trafficStore } from './traffic.js';
 const SOURCE_STYLE = {
     interface: { label: 'Radio link', color: '#3987e5',
         help: 'byte counters of the robot\'s link interface: everything on '
-            + 'the link, overhead and the orchestrator included' },
+            + 'the link, overhead and Orca included' },
     net_adapter: { label: 'net_adapter', color: '#d95926',
         help: 'payload net_adapter reports, per topic, without protocol '
             + 'overhead' },
@@ -74,15 +74,15 @@ function useWidth(reference) {
 
 export function CompetitionPanel({ state }) {
     const isOn = state.settings.competition_mode;
-    const orchestratorKbps = state.machines.reduce((total, entry) =>
+    const orcaKbps = state.machines.reduce((total, entry) =>
         total + (entry.machine.is_local ? 0
-            : entry.connection.orchestrator_kbps || 0), 0);
+            : entry.connection.orca_kbps || 0), 0);
     return html`
         <section class="panel competition ${isOn ? 'on' : ''}">
             <div class="run-head">
                 <div>
                     <h2>Competition mode</h2>
-                    <p class="muted">Keeps the orchestrator's own traffic on
+                    <p class="muted">Keeps Orca's own traffic on
                         the robot's link small: status every 10 s instead of 2 s, and
                         output from other machines' processes only on request
                         (errors still show when you open a run).</p>
@@ -94,8 +94,8 @@ export function CompetitionPanel({ state }) {
                     <span></span>${isOn ? 'On' : 'Off'}
                 </label>
             </div>
-            <div class="muted">Orchestrator traffic to other machines right now:
-                <b>${' ' + formatKbps(orchestratorKbps)}</b> (payload; SSH
+            <div class="muted">Orca traffic to other machines right now:
+                <b>${' ' + formatKbps(orcaKbps)}</b> (payload; SSH
                 adds a few percent)</div>
         </section>`;
 }
@@ -335,7 +335,9 @@ function ChannelBars({ budget }) {
 
 // --- Budget: sources ---------------------------------------------------------
 
-function linkInterfaceOptions(machines) {
+// Interfaces to measure the robot's link on. The saved one stays listed
+// while its machine is offline, so the choice is still visible.
+function linkInterfaceOptions(machines, chosen) {
     const options = [];
     for (const entry of machines) {
         if (entry.connection.state !== 'online' || !entry.stats) continue;
@@ -349,10 +351,16 @@ function linkInterfaceOptions(machines) {
                     iface.kind === 'wifi' ? ' (Wi-Fi)' : ''}` });
         }
     }
+    if (chosen && !options.some((option) => option.value === chosen)) {
+        const [machineId, ...name] = chosen.split('/');
+        const entry = machines.find((item) => item.machine.id === machineId);
+        options.push({ value: chosen, label: `${entry ? entry.machine.label
+            : machineId} · ${name.join('/')} (offline)` });
+    }
     return options;
 }
 
-function BudgetSources({ state }) {
+export function BudgetSources({ state }) {
     const budget = state.budget;
     const settings = budget.settings;
     const [monitorMachine, setMonitorMachine] = useState(
@@ -363,6 +371,11 @@ function BudgetSources({ state }) {
     const monitor = budget.monitor;
     const withWorkspace = state.machines.filter((entry) =>
         entry.machine.workspace && entry.connection.state === 'online');
+    // What the list shows is what Start uses, even when the remembered
+    // machine is offline.
+    const monitorChoice = withWorkspace.some((entry) =>
+        entry.machine.id === monitorMachine) ? monitorMachine
+        : withWorkspace.length ? withWorkspace[0].machine.id : null;
 
     const save = (changes) => postJson('/api/settings', { budget: changes })
         .catch((failure) => setError(failure.message));
@@ -370,7 +383,7 @@ function BudgetSources({ state }) {
         setError(null);
         try {
             await postJson('/api/budget/monitor', monitor.state === 'stopped'
-                ? { machine_id: monitorMachine } : {});
+                ? { machine_id: monitorChoice } : {});
         } catch (failure) {
             setError(failure.message);
         }
@@ -389,7 +402,8 @@ function BudgetSources({ state }) {
                             : null });
                     }}>
                     <option value="">not measured</option>
-                    ${linkInterfaceOptions(state.machines).map((option) =>
+                    ${linkInterfaceOptions(state.machines, chosen).map(
+                        (option) =>
                         html`<option value=${option.value}>${option.label}
                             </option>`)}
                 </select>
@@ -406,7 +420,7 @@ function BudgetSources({ state }) {
             <label class="field">
                 <span>net_adapter monitor on</span>
                 <div class="button-row tight">
-                    <select class="input" value=${monitorMachine}
+                    <select class="input" value=${monitorChoice || ''}
                         disabled=${monitor.state !== 'stopped'}
                         onChange=${(event) => setMonitorMachine(
                             event.target.value)}>
@@ -414,7 +428,9 @@ function BudgetSources({ state }) {
                             value=${entry.machine.id}>${entry.machine.label}
                             </option>`)}
                     </select>
-                    <button class="button" onClick=${toggleMonitor}>
+                    <button class="button" onClick=${toggleMonitor}
+                        disabled=${monitor.state === 'stopped'
+                            && !monitorChoice}>
                         ${monitor.state === 'stopped' ? 'Start' : 'Stop'}
                         </button>
                     <span class="pill ${monitor.state === 'receiving' ? 'good'
@@ -490,12 +506,12 @@ export function TrafficPanel({ state }) {
         <section class="panel">
             <h2>Traffic</h2>
             <p class="muted">Every interface on every machine, from its byte
-                counters (everything, not just robot code). Orchestrator
-                column: the orchestrator's own traffic with that machine.</p>
+                counters (everything, not just robot code). Orca
+                column: Orca's own traffic with that machine.</p>
             <table class="table">
                 <thead><tr><th>Machine</th><th>Interface</th><th>Address</th>
                     <th>Down</th><th>Up</th><th>Last 3 min</th>
-                    <th>Orchestrator</th>
+                    <th>Orca</th>
                 </tr></thead>
                 <tbody>${rows.map(({ entry, iface }, index) => html`
                     <tr key=${`${entry.machine.id}/${iface.name}`}>
@@ -512,7 +528,7 @@ export function TrafficPanel({ state }) {
                             || rows[index - 1].entry !== entry
                             ? (entry.machine.is_local ? '–'
                                 : formatKbps(entry.connection
-                                    .orchestrator_kbps)) : ''}
+                                    .orca_kbps)) : ''}
                             </td>
                     </tr>`)}</tbody>
             </table>

@@ -1,7 +1,7 @@
 '''
 SSH command lines for reaching machines.
 
-The orchestrator builds every SSH option itself instead of relying on
+Orca builds every SSH option itself instead of relying on
 ~/.ssh/config, so it behaves the same on every operator's laptop. ~/.ssh/config
 still applies to anything not set here (keys, for example).
 
@@ -27,7 +27,7 @@ SSH_OPTIONS = [
     '-o', 'ServerAliveCountMax=3',
 ]
 
-AGENT_REMOTE_PATH = '"$HOME/.orchestrator/agent.py"'
+AGENT_REMOTE_PATH = '"$HOME/.orca/agent.py"'
 
 # Runs in the remote user's login shell (zsh on macOS, bash on Ubuntu).
 ATTACH_COMMAND = (
@@ -36,9 +36,9 @@ ATTACH_COMMAND = (
     + 'exec python3 -u ' + AGENT_REMOTE_PATH + ' attach')
 
 DEPLOY_COMMAND = (
-    'mkdir -p "$HOME/.orchestrator" && '
-    'cat > "$HOME/.orchestrator/agent.py.new" && '
-    'mv "$HOME/.orchestrator/agent.py.new" ' + AGENT_REMOTE_PATH)
+    'mkdir -p "$HOME/.orca" && '
+    'cat > "$HOME/.orca/agent.py.new" && '
+    'mv "$HOME/.orca/agent.py.new" ' + AGENT_REMOTE_PATH)
 
 
 def sshBaseCommand(route: Route, jumpRouteFor) -> list:

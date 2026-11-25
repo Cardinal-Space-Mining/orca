@@ -1,6 +1,6 @@
 '''
-Orchestrator settings that persist between runs, in
-~/.config/orchestrator/settings.json.
+Orca settings that persist between runs, in
+~/.config/orca/settings.json.
 '''
 
 from __future__ import annotations
@@ -10,10 +10,10 @@ import json
 import os
 
 
-SETTINGS_PATH = os.path.expanduser('~/.config/orchestrator/settings.json')
+SETTINGS_PATH = os.path.expanduser('~/.config/orca/settings.json')
 
 DEFAULTS = {
-    # Less orchestrator traffic on the robot's link: slower status, no live
+    # Less Orca traffic on the robot's link: slower status, no live
     # output from other machines (see docs on the Network page).
     'competition_mode': False,
     'budget': {
@@ -33,7 +33,38 @@ DEFAULTS = {
     # Last internet-sharing choices per machine id (downstream port,
     # subnet...), offered again next time.
     'sharing': {},
+    # Used when the command line doesn't say (--port, --no-browser); they
+    # apply the next time Orca starts.
+    'startup': {
+        'port': 8740,
+        'open_browser': True,
+    },
 }
+
+
+def validateChanges(changes: dict) -> None:
+    """Refuse values Orca can't use (raises ValueError)."""
+    def number(value, name, low, high):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not low <= value <= high:
+            raise ValueError('%s must be a number from %s to %s'
+                             % (name, low, high))
+
+    if not isinstance(changes, dict):
+        raise ValueError('settings changes must be an object')
+    budget = changes.get('budget') or {}
+    if 'limit_kbps' in budget:
+        number(budget['limit_kbps'], 'the limit', 1, 1000000)
+    if 'camera_kbps' in budget:
+        number(budget['camera_kbps'], 'camera bandwidth', 0, 100000)
+    if 'num_cameras' in budget:
+        number(budget['num_cameras'], 'the number of cameras', 0, 10)
+    startup = changes.get('startup') or {}
+    if 'port' in startup:
+        number(startup['port'], 'the port', 1024, 65535)
+    for key in ('competition_mode',):
+        if key in changes and not isinstance(changes[key], bool):
+            raise ValueError(key + ' must be true or false')
 
 
 def mergeDefaults(saved: dict, defaults: dict) -> dict:

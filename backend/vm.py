@@ -32,11 +32,11 @@ GUEST_WAKE_DELAYS_S = [15, 30, 45, 60, 90]
 
 class VmController:
 
-    def __init__(self, orchestrator):
-        self.orchestrator = orchestrator
+    def __init__(self, orca):
+        self.orca = orca
 
     def host(self, machine_id: str):
-        link = self.orchestrator.link(machine_id)
+        link = self.orca.link(machine_id)
         if not link.machine.vm:
             raise PlanError('%s has no VM in the inventory'
                             % link.machine.label)
@@ -45,7 +45,7 @@ class VmController:
         return link
 
     def activeRun(self, machine_id: str):
-        for run in self.orchestrator.runs.values():
+        for run in self.orca.runs.values():
             if run.kind == 'vm' and run.scenario_id == machine_id \
                     and run.snapshot()['state'] in ('starting', 'running'):
                 return run
@@ -88,10 +88,10 @@ class VmController:
             'task': True, 'after': [], 'start_delay_s': 0,
             'cwd': posixpath.dirname(argv[0]), 'argv': argv}]}
         # The run's scenario_id names the host, so activeRun can find it.
-        run = Run(self.orchestrator, newRunId(), label, machine_id, plan,
+        run = Run(self.orca, newRunId(), label, machine_id, plan,
                   kind='vm')
-        self.orchestrator.runs[run.run_id] = run
-        self.orchestrator.forgetOldRuns()
+        self.orca.runs[run.run_id] = run
+        self.orca.forgetOldRuns()
         run.start()
         if action in ('start', 'restart'):
             asyncio.ensure_future(self.wakeGuest(link))
@@ -102,7 +102,7 @@ class VmController:
         return posixpath.join(directory, 'run-vm.sh')
 
     async def wakeGuest(self, link):
-        guest = self.orchestrator.links_by_id.get(link.machine.vm.guest or '')
+        guest = self.orca.links_by_id.get(link.machine.vm.guest or '')
         if guest is None:
             return
         elapsed = 0
@@ -121,7 +121,7 @@ class VmController:
         socket = vm.get('serial_socket')
         if not socket:
             raise PlanError('the VM was started without a serial console; '
-                            'restart it from the orchestrator to get one')
+                            'restart it from Orca to get one')
         # Raw mode: every key (Ctrl-C included) goes to the VM.
         return ['sudo', '-n', 'socat', '-,raw,echo=0',
                 'UNIX-CONNECT:' + socket]

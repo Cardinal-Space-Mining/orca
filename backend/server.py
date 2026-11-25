@@ -1,5 +1,5 @@
 '''
-Small HTTP server for the orchestrator's web interface (standard library only).
+Small HTTP server for Orca's web interface (standard library only).
 
     GET  /                                  the app
     GET  /static/<path>                     files under web/
@@ -27,6 +27,9 @@ Small HTTP server for the orchestrator's web interface (standard library only).
     POST /api/machines/<id>/bags/delete     {"name"}, only once pulled
     GET  /api/machines/<id>/logs            log files there
     GET  /api/machines/<id>/logs/read?path=&max_bytes=[&download=1]
+    POST /api/machines/<id>/logs/delete     {"path"}
+    GET  /api/machines/<id>/cleanup         what could be deleted there
+    POST /api/machines/<id>/cleanup         {"categories": [...]}: delete it
     POST /api/machines/<id>/vm/<action>     start, stop, restart, kill, commit,
                                             backup, restore (a run)
     POST /api/machines/<id>/terminals       {"kind": "shell"|"serial"|
@@ -47,8 +50,10 @@ Small HTTP server for the orchestrator's web interface (standard library only).
                                             connect once, suggest an entry
     POST /api/discovery/add                 {"scope", "entry"}
     POST /api/machines/<id>/terminals/<t>/input|resize|close
-    GET  /api/settings, POST /api/settings  orchestrator settings (competition
-                                            mode, budget sources)
+    GET  /api/settings, POST /api/settings  Orca settings (competition
+                                            mode, budget, startup)
+    POST /api/settings/forget               {"what": "sharing"|"addresses",
+                                            "machine_id"}
     GET  /api/budget                        bandwidth budget with history
     POST /api/budget/reset                  start a new averaging window
     POST /api/budget/monitor                {"machine_id"} start / {} stop the
@@ -59,10 +64,22 @@ Small HTTP server for the orchestrator's web interface (standard library only).
     GET  /api/config                        launch config actions and presets
     GET  /api/config/preset?action=&preset= one preset, resolved
     POST /api/config/resolve                {"arguments": {key: value}}
+    POST /api/config/check                  {"action", "preset", "value"}:
+                                            what's wrong, what it resolves to
+    POST /api/config/save                   the same + {"description"}: write
+                                            it into its lance config file
+    POST /api/config/delete                 {"action", "preset"}
+    POST /api/config/description            {"key", "text"} ("action" or
+                                            "action:=preset")
 
 Every response except the event stream closes its connection, which keeps the
-parser trivial. The server binds to localhost by default: the orchestrator is
+parser trivial. The server binds to localhost by default: Orca is
 meant to be used on the machine it runs on.
+
+Other web pages open in the same browser can reach localhost too, so API
+requests from another origin are refused (Origin must match Host), POSTs must
+be JSON (which a cross-site form can't send), and when bound to localhost the
+Host must be a loopback name (so a DNS-rebound name can't read answers).
 '''
 
 from __future__ import annotations
@@ -71,11 +88,15 @@ import asyncio
 import json
 import mimetypes
 import os
+import re
+import sys
+import traceback
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from .core import ORCHESTRATOR_ROOT, Orchestrator
+from .core import ORCA_ROOT, Orca
 from .inventory import InventoryError
+from .config_edit import ConfigEditor, configFiles, overrideProblems
 from .lance_config import ConfigError
 from .link import AgentError
 from .runs import PlanError
@@ -83,7 +104,7 @@ from .scenarios import (ScenarioError, deleteScenario, parseScenarioText,
                         readScenarioSource, writeScenario)
 
 
-WEB_ROOT = os.path.join(ORCHESTRATOR_ROOT, 'web')
+WEB_ROOT = os.path.join(ORCA_ROOT, 'web')
 MAX_HEADER_LINES = 100
 MAX_BODY_BYTES = 1024 * 1024
 KEEPALIVE_PERIOD_S = 15.0
@@ -93,8 +114,11 @@ REQUEST_ERRORS = (PlanError, ConfigError, ScenarioError, AgentError,
                   InventoryError,
                   ConnectionError, asyncio.TimeoutError, ValueError, KeyError)
 
-STATUS_TEXT = {200: 'OK', 400: 'Bad Request', 404: 'Not Found',
-               405: 'Method Not Allowed', 500: 'Internal Server Error'}
+STATUS_TEXT = {200: 'OK', 400: 'Bad Request', 403: 'Forbidden',
+               404: 'Not Found', 405: 'Method Not Allowed',
+               500: 'Internal Server Error'}
+
+LOOPBACK_NAMES = ('localhost', '127.0.0.1', '::1')
 
 mimetypes.add_type('text/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
@@ -168,6 +192,25 @@ def writeError(writer, status: int, message: str):
     writeJson(writer, status, {'error': message})
 
 
+def hostName(host: str) -> str:
+    '''"localhost:8740" -> "localhost", "[::1]:8740" -> "::1".'''
+    return (urlsplit('//' + host).hostname or '').lower()
+
+
+def foreignRequest(request: Request, loopback_only: bool) -> Optional[str]:
+    '''Why a request looks like it comes from another web page, or None.'''
+    host = request.headers.get('host', '')
+    if loopback_only and hostName(host) not in LOOPBACK_NAMES:
+        return 'unexpected Host %r' % host
+    origin = request.headers.get('origin')
+    if origin is not None and urlsplit(origin).netloc != host:
+        return 'requests from %s are not allowed' % origin
+    if request.method == 'POST' and not request.headers.get(
+            'content-type', '').startswith('application/json'):
+        return 'POST bodies must be application/json'
+    return None
+
+
 
 # --- Server -------------------------------------------------------------------
 
@@ -175,12 +218,14 @@ def writeError(writer, status: int, message: str):
 
 class HttpServer:
 
-    def __init__(self, orchestrator: Orchestrator):
-        self.orchestrator = orchestrator
+    def __init__(self, orca: Orca):
+        self.orca = orca
+        self.loopback_only = True
 
     async def start(self, host: str, port: int):
         '''"localhost" listens on both loopback addresses: browsers often try
         ::1 first and log a refused connection when only 127.0.0.1 answers.'''
+        self.loopback_only = host in LOOPBACK_NAMES
         if host != 'localhost':
             return await asyncio.start_server(self.handle, host, port)
         try:
@@ -214,6 +259,10 @@ class HttpServer:
             writeError(writer, 404, 'not found')
 
     async def routeApi(self, request: Request, writer):
+        refusal = foreignRequest(request, self.loopback_only)
+        if refusal:
+            writeError(writer, 403, refusal)
+            return
         parts = request.path.strip('/').split('/')[1:]  # drop "api"
         if request.method == 'GET' and parts == ['events']:
             await self.streamEvents(writer)
@@ -229,6 +278,12 @@ class HttpServer:
                 message = 'missing ' + message
             writeError(writer, 400, message)
             return
+        except Exception as error:  # a bug: say so instead of hanging up
+            print('[ORCA]: %s %s failed:' % (request.method, request.path),
+                  file=sys.stderr)
+            traceback.print_exc()
+            writeError(writer, 500, '%s: %s' % (type(error).__name__, error))
+            return
         if result is None:
             writeError(writer, 404, 'not found')
         else:
@@ -237,68 +292,71 @@ class HttpServer:
     async def answerApi(self, request: Request, parts: list):
         """The JSON answer for an API request, or None if there's no such
         endpoint."""
-        orchestrator = self.orchestrator
+        orca = self.orca
         method = request.method
         if method == 'GET' and parts == ['state']:
-            return orchestrator.snapshot()
+            return orca.snapshot()
         if parts[:1] == ['machines'] and len(parts) >= 3:
             return await self.answerMachine(request, parts[1], parts[2:])
         if method == 'GET' and parts == ['scenarios']:
-            scenarios, errors = orchestrator.scenarios()
+            scenarios, errors = orca.scenarios()
             return {'scenarios': scenarios, 'errors': errors}
         if parts[:1] == ['scenarios'] and len(parts) in (2, 3):
             return self.answerScenario(request, parts[1], parts[2:])
         if method == 'POST' and parts == ['plan']:
-            return orchestrator.plan(request.json())
+            return orca.plan(request.json())
         if method == 'POST' and parts == ['runs']:
-            return orchestrator.launch(request.json())
+            return orca.launch(request.json())
         if method == 'POST' and len(parts) == 3 and parts[0] == 'runs':
             if parts[2] == 'stop':
-                await orchestrator.stopRun(parts[1])
+                await orca.stopRun(parts[1])
                 return {'ok': True}
             if parts[2] == 'dismiss':
-                orchestrator.dismissRun(parts[1])
+                orca.dismissRun(parts[1])
                 return {'ok': True}
         if parts[:1] == ['config']:
             return self.answerConfig(request, parts[1:])
         if parts[:1] == ['discovery'] and len(parts) == 2:
             return await self.answerDiscovery(request, parts[1])
         if method == 'GET' and parts == ['settings']:
-            return orchestrator.settings
+            return orca.settings
         if method == 'POST' and parts == ['settings']:
-            return await orchestrator.updateSettings(request.json())
+            return await orca.updateSettings(request.json())
+        if method == 'POST' and parts == ['settings', 'forget']:
+            body = request.json()
+            return orca.forget(body['what'], body['machine_id'])
         if method == 'GET' and parts == ['budget']:
-            return orchestrator.budget.snapshot(with_history=True)
+            return orca.budget.snapshot(with_history=True)
         if method == 'POST' and parts == ['budget', 'reset']:
-            orchestrator.budget.reset()
+            orca.budget.reset()
             return {'ok': True}
         if method == 'POST' and parts == ['budget', 'monitor']:
             body = request.json()
             if body.get('machine_id'):
-                return await orchestrator.startMonitor(body['machine_id'])
-            return await orchestrator.stopMonitor()
+                return await orca.startMonitor(body['machine_id'])
+            return await orca.stopMonitor()
         if method == 'GET' and parts == ['inventory']:
-            return orchestrator.inventory()
+            return orca.inventory()
         if method == 'POST' and len(parts) == 2 and parts[0] == 'inventory':
-            return await orchestrator.saveInventory(
+            return await orca.saveInventory(
                 parts[1], request.json()['machines'])
         if method == 'POST' and parts == ['deploy', 'compare']:
             body = request.json()
-            return await orchestrator.deployer.compare(
+            return await orca.deployer.compare(
                 body['machine_id'], body.get('delete', True))
         if method == 'POST' and parts == ['deploy']:
-            return orchestrator.deployer.deploy(request.json()).snapshot()
+            return orca.deployer.deploy(request.json()).snapshot()
         return None
 
     async def answerMachine(self, request: Request, machine_id: str,
                             parts: list):
-        orchestrator = self.orchestrator
+        orca = self.orca
         method = request.method
         if method == 'POST' and parts == ['reconnect']:
-            orchestrator.reconnect(machine_id)
+            orca.reconnect(machine_id)
             return {'ok': True}
         if parts == ['host-key']:
-            link = orchestrator.link(machine_id)
+            link = orca.link(machine_id)
             if method == 'GET':
                 return await link.scanHostKey()
             await link.trustHostKey(request.json()['fingerprints'])
@@ -307,53 +365,60 @@ class HttpServer:
             return await self.answerNetTool(machine_id, parts[1],
                                             request.json())
         if method == 'POST' and len(parts) == 2 and parts[0] == 'vm':
-            return orchestrator.vm.run(machine_id, parts[1],
-                                       request.json()).snapshot()
+            return orca.vm.run(machine_id, parts[1],
+                               request.json()).snapshot()
         if method == 'POST' and len(parts) == 2 and parts[0] == 'sharing':
             body = request.json()
             if parts[1] == 'up':
-                return await orchestrator.sharing.up(machine_id, body)
+                return await orca.sharing.up(machine_id, body)
             if parts[1] == 'down':
-                return await orchestrator.sharing.down(machine_id,
-                                                       body.get('name'))
+                return await orca.sharing.down(machine_id,
+                                               body.get('name'))
             if parts[1] == 'refresh':
-                link = orchestrator.link(machine_id)
-                await orchestrator.sharing.refresh(link)
+                link = orca.link(machine_id)
+                await orca.sharing.refresh(link)
                 return link.state['sharing'] or {}
         if method == 'POST' and parts == ['setup', 'refresh']:
-            link = orchestrator.link(machine_id)
-            await orchestrator.setup.refresh(link)
+            link = orca.link(machine_id)
+            await orca.setup.refresh(link)
             return link.state['setup']
         if method == 'POST' and parts[:1] == ['terminals']:
             return await self.answerTerminal(request, machine_id, parts[1:])
         if parts[:1] == ['bags']:
             if method == 'GET' and len(parts) == 1:
-                return await orchestrator.deployer.listBags(machine_id)
+                return await orca.deployer.listBags(machine_id)
             if method == 'POST' and parts[1:] == ['pull']:
-                return orchestrator.deployer.pullBags(
+                return orca.deployer.pullBags(
                     machine_id, request.json()['names']).snapshot()
             if method == 'POST' and parts[1:] == ['delete']:
-                return await orchestrator.deployer.deleteBag(
+                return await orca.deployer.deleteBag(
                     machine_id, request.json()['name'])
         if method == 'GET' and parts == ['logs']:
-            return {'logs': await orchestrator.listLogs(machine_id)}
+            return {'logs': await orca.listLogs(machine_id)}
+        if method == 'POST' and parts == ['logs', 'delete']:
+            return await orca.deleteLog(machine_id, request.json()['path'])
+        if parts == ['cleanup']:
+            if method == 'GET':
+                return await orca.cleanupScan(machine_id)
+            return await orca.cleanup(machine_id,
+                                      request.json()['categories'])
         if method == 'GET' and parts == ['logs', 'read']:
-            return await orchestrator.readLog(
+            return await orca.readLog(
                 machine_id, request.queryValue('path'),
                 int(request.queryValue('max_bytes', str(1024 * 1024))))
         if len(parts) == 3 and parts[0] == 'processes':
             process_id = parts[1]
             if method == 'GET' and parts[2] == 'output':
-                return await orchestrator.processOutput(
+                return await orca.processOutput(
                     machine_id, process_id, int(request.queryValue('from', '0')),
                     request.queryValue('refresh') == '1')
             if method == 'POST' and parts[2] == 'stop':
-                await orchestrator.stopProcess(machine_id, process_id)
+                await orca.stopProcess(machine_id, process_id)
                 return {'ok': True}
         return None
 
     async def answerNetTool(self, machine_id: str, tool: str, body: dict):
-        link = self.orchestrator.link(machine_id)
+        link = self.orca.link(machine_id)
         if tool == 'ping':
             return await link.call('net.ping', {
                 'host': body['host'], 'count': body.get('count', 4)},
@@ -366,13 +431,13 @@ class HttpServer:
             result = await link.call('net.scan', {
                 'cidr': body['cidr'], 'ports': body.get('ports') or [22]},
                 timeout_s=120.0)
-            self.orchestrator.noteScan(machine_id, result)
+            self.orca.noteScan(machine_id, result)
             return result
         return None
 
     def answerScenario(self, request: Request, scenario_id: str,
                        action: list):
-        workspace = self.orchestrator.workspace_root
+        workspace = self.orca.workspace_root
         if request.method == 'GET' and action == ['source']:
             return readScenarioSource(workspace, scenario_id)
         if request.method != 'POST':
@@ -389,7 +454,7 @@ class HttpServer:
         return None
 
     async def answerDiscovery(self, request: Request, action: str):
-        discovery = self.orchestrator.discovery
+        discovery = self.orca.discovery
         if request.method == 'GET' and action == 'networks':
             return {'networks': discovery.networks(
                 request.queryValue('machine_id', 'local'))}
@@ -411,10 +476,10 @@ class HttpServer:
 
     async def answerTerminal(self, request: Request, machine_id: str,
                              parts: list):
-        orchestrator = self.orchestrator
+        orca = self.orca
         body = request.json()
         if parts == []:
-            return await orchestrator.openTerminal(
+            return await orca.openTerminal(
                 machine_id, body.get('kind', 'shell'),
                 int(body.get('cols', 100)), int(body.get('rows', 30)), body)
         if len(parts) != 2:
@@ -429,12 +494,12 @@ class HttpServer:
             params = {'terminal_id': terminal_id}
         else:
             return None
-        await orchestrator.terminalCall(machine_id, 'terminal.' + action,
-                                        params)
+        await orca.terminalCall(machine_id, 'terminal.' + action,
+                                params)
         return {'ok': True}
 
     async def downloadLog(self, request: Request, machine_id: str, writer):
-        log = await self.orchestrator.readLog(
+        log = await self.orca.readLog(
             machine_id, request.queryValue('path'), 20 * 1024 * 1024)
         name = '%s-%s' % (machine_id, os.path.basename(log['path']))
         name = ''.join(character if character.isalnum() or character in '._-'
@@ -445,20 +510,81 @@ class HttpServer:
                       % name)
 
     def answerConfig(self, request: Request, parts: list):
-        config = self.orchestrator.lanceConfig()
+        config = self.orca.lanceConfig()
         if config is None:
-            raise ConfigError(self.orchestrator.lance_config_error
-                              or 'the orchestrator has no workspace')
+            raise ConfigError(self.orca.lance_config_error
+                              or 'Orca has no workspace')
+        editor = ConfigEditor(config, self.orca.workspace_root)
         if request.method == 'GET' and parts == []:
-            return {'actions': config.actions(),
-                    'constants': config.addressConstants(),
-                    'path': config.config_path}
+            return self.configCatalog(config, editor)
         if request.method == 'GET' and parts == ['preset']:
             return config.resolvePreset(request.queryValue('action'),
                                         request.queryValue('preset'))
-        if request.method == 'POST' and parts == ['resolve']:
-            return config.resolve(request.json().get('arguments') or {})
+        if request.method != 'POST':
+            return None
+        body = request.json()
+        if parts == ['resolve']:
+            return config.resolve(body.get('arguments') or {})
+        if parts == ['check']:
+            return editor.check(body['action'], body['preset'], body['value'])
+        if parts == ['save']:
+            path = editor.edit(body['action'], body['preset'], body['value'])
+            if 'description' in body:
+                editor.setDescription('%s:=%s' % (body['action'],
+                                                  body['preset']),
+                                      body['description'])
+            return {'ok': True, 'path': editor.relative(path)}
+        if parts == ['delete']:
+            path = editor.delete(body['action'], body['preset'],
+                                 self.scenarioReferences(body['action'],
+                                                         body['preset']))
+            return {'ok': True, 'path': editor.relative(path)}
+        if parts == ['description']:
+            editor.setDescription(body['key'], body.get('text') or '')
+            return {'ok': True}
         return None
+
+    def configCatalog(self, config, editor: ConfigEditor) -> dict:
+        actions = config.actions()
+        merged = config.load()
+        descriptions = editor.descriptions()
+        sources = {}
+        for path, data in configFiles(config):
+            for action, block in data.items():
+                if isinstance(block, dict) and not action.startswith(
+                        'pragma:'):
+                    for preset in block:
+                        sources.setdefault((action, preset),
+                                           editor.relative(path))
+        for action in actions:
+            action['description'] = descriptions.get(action['name'])
+            action['source'] = editor.relative(editor.sourceOf(
+                action['name']))
+            for preset in action['presets']:
+                key = '%s:=%s' % (action['name'], preset['name'])
+                preset['description'] = descriptions.get(key)
+                preset['source'] = sources.get((action['name'],
+                                                preset['name']))
+                preset['problems'] = overrideProblems(merged, preset['raw'])
+        return {'actions': actions,
+                'constants': config.addressConstants(),
+                'path': config.config_path,
+                'descriptions_path': editor.relative(
+                    editor.descriptions_path)}
+
+    def scenarioReferences(self, action: str, preset: str) -> list:
+        """Scenarios that can select action:=preset ("{robot}_{arena}"
+        counts as matching any name)."""
+        def matches(value) -> bool:
+            pattern = re.sub(r'\\\{[^}]*\\\}', '.+', re.escape(str(value)))
+            return re.fullmatch(pattern, preset) is not None
+
+        scenarios, _ = self.orca.scenarios()
+        return ['the scenario "%s" may use it' % scenario['id']
+                for scenario in scenarios
+                if any(matches(((process.get('lance') or {}).get('args')
+                                or {}).get(action, ''))
+                       for process in scenario.get('processes', []))]
 
     def serveFile(self, writer, relative_path: str):
         full_path = os.path.realpath(os.path.join(WEB_ROOT, relative_path))
@@ -480,11 +606,13 @@ class HttpServer:
                      b'Content-Type: text/event-stream\r\n'
                      b'Cache-Control: no-cache\r\n'
                      b'Connection: keep-alive\r\n\r\n')
-        queue = self.orchestrator.subscribe()
+        queue = self.orca.subscribe()
         try:
-            self.writeEvent(writer, 'snapshot', self.orchestrator.snapshot())
+            self.writeEvent(writer, 'snapshot', self.orca.snapshot())
             await writer.drain()
-            while True:
+            # publish() drops a queue that fell too far behind; closing the
+            # stream then makes the browser reconnect and take a snapshot.
+            while queue in self.orca.subscribers:
                 try:
                     event, data = await asyncio.wait_for(
                         queue.get(), KEEPALIVE_PERIOD_S)
@@ -493,7 +621,7 @@ class HttpServer:
                     writer.write(b': keepalive\n\n')
                 await writer.drain()
         finally:
-            self.orchestrator.unsubscribe(queue)
+            self.orca.unsubscribe(queue)
 
     @staticmethod
     def writeEvent(writer, event: str, data):

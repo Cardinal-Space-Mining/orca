@@ -1,4 +1,4 @@
-// Editing a scenario file (src/project/orchestrator/scenarios/<id>.json):
+// Editing a scenario file (src/project/orca/scenarios/<id>.json):
 // its JSON, checked as you type, with the launch it would make previewed
 // beside it. Saving writes the file in the workspace; commit it to share it.
 
@@ -165,7 +165,7 @@ export function ScenarioEditor({ state, scenarioId }) {
                 <p><a class="link-button" href=${sourceId && !isCopy
                     ? `#/launch/${encodeURIComponent(sourceId)}`
                     : '#/launch'}>← Launch</a>${' · '}saved to${' '}<span
-                    class="mono">${`src/project/orchestrator/scenarios/${
+                    class="mono">${`src/project/orca/scenarios/${
                     id || '<id>'}.json`}</span>${' '}(commit it to share it)
                     </p>
             </div>

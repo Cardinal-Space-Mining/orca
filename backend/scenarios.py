@@ -1,7 +1,7 @@
 '''
 Scenarios: named setups that start processes on one or more machines.
 
-One JSON file per scenario in <workspace>/src/project/orchestrator/scenarios/
+One JSON file per scenario in <workspace>/src/project/orca/scenarios/
 (the file name is its id):
 
     {
@@ -44,7 +44,7 @@ One JSON file per scenario in <workspace>/src/project/orchestrator/scenarios/
 Placeholders in args, set values and commands:
     {option}    an option's value
     {ip:role}   the address of the role's machine, as reached from the
-                machine this process runs on (the orchestrator picks one on a
+                machine this process runs on (Orca picks one on a
                 shared network; it can be overridden at launch)
 
 "set" changes single values of the actions the presets select, which the
@@ -59,7 +59,7 @@ import os
 import re
 
 
-SCENARIO_DIRECTORY = os.path.join('src', 'project', 'orchestrator',
+SCENARIO_DIRECTORY = os.path.join('src', 'project', 'orca',
                                   'scenarios')
 PLACEHOLDER = re.compile(r'\{([A-Za-z_][\w-]*)(?::([\w-]+))?\}')
 
@@ -151,7 +151,7 @@ def checkScenario(scenario_id: str, data: dict) -> None:
 
 def loadScenarios(workspace_root) -> tuple:
     '''Returns (scenarios sorted for display, errors). A broken file is
-    reported instead of stopping the orchestrator.'''
+    reported instead of stopping Orca.'''
     if not workspace_root:
         return [], []
     scenarios = []
@@ -184,7 +184,7 @@ SCENARIO_ID = re.compile(r'^[a-z0-9][a-z0-9-]{0,40}$')
 
 def scenarioPath(workspace_root, scenario_id: str) -> str:
     if not workspace_root:
-        raise ScenarioError('the orchestrator has no workspace')
+        raise ScenarioError('Orca has no workspace')
     if not SCENARIO_ID.match(scenario_id or ''):
         raise ScenarioError('a scenario id is lowercase letters, digits and '
                             'dashes')

@@ -1,19 +1,19 @@
 '''Launch-config resolution and overlays, against this workspace's real
-lance config (skipped when the orchestrator isn't inside a workspace).'''
+lance config (skipped when Orca isn't inside a workspace).'''
 
 import os
 import unittest
 
-from backend.core import ORCHESTRATOR_ROOT
+from backend.core import ORCA_ROOT
 from backend.lance_config import ConfigError, LanceConfig
 
 
-WORKSPACE = os.path.dirname(os.path.dirname(ORCHESTRATOR_ROOT))
+WORKSPACE = os.path.dirname(os.path.dirname(ORCA_ROOT))
 HAS_CONFIG = os.path.isfile(os.path.join(
     WORKSPACE, 'src', 'lance', 'config', 'launch.json'))
 
 
-@unittest.skipUnless(HAS_CONFIG, 'no lance workspace around the orchestrator')
+@unittest.skipUnless(HAS_CONFIG, 'no lance workspace around Orca')
 class LanceConfigTest(unittest.TestCase):
 
     def setUp(self):
@@ -30,11 +30,11 @@ class LanceConfigTest(unittest.TestCase):
         overlay, extra, final, constants = self.config.overlayFor(
             arguments, {'redux': {'client_hostname': '10.1.2.3'}}, 'robot')
         self.assertEqual(constants, [])
-        self.assertEqual(extra, {'redux': 'orchestrator_robot'})
+        self.assertEqual(extra, {'redux': 'orca_robot'})
         self.assertEqual(overlay['pragma:import'], ['launch.json'])
-        derived = overlay['redux']['orchestrator_robot']
+        derived = overlay['redux']['orca_robot']
         self.assertEqual(derived['pragma:derived'], parent)
-        self.assertEqual(final['selected']['redux'], 'orchestrator_robot')
+        self.assertEqual(final['selected']['redux'], 'orca_robot')
         self.assertEqual(final['config']['redux']['client_hostname'],
                          '10.1.2.3')
 

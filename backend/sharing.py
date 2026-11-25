@@ -23,8 +23,8 @@ from .settings import saveSettings
 HELPER_SOURCE_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     'agent', 'share_helper.py')
-HELPER_REMOTE_PATH = '~/.orchestrator/share_helper.py'
-INSTALL_SCRIPT_REMOTE_PATH = '~/.orchestrator/install-share-helper.sh'
+HELPER_REMOTE_PATH = '~/.orca/share_helper.py'
+INSTALL_SCRIPT_REMOTE_PATH = '~/.orca/install-share-helper.sh'
 DEFAULT_NAME = 'share'
 # Subnets offered by default, first one not already in use on the machine.
 DEFAULT_SUBNETS = ['10.11.11.0/24'] + ['10.11.%d.0/24' % third
@@ -32,13 +32,13 @@ DEFAULT_SUBNETS = ['10.11.11.0/24'] + ['10.11.%d.0/24' % third
 RECONNECT_DELAY_S = 3.0
 
 INSTALL_SCRIPT = '''#!/bin/bash
-# Installs the orchestrator's internet-sharing helper. Asks for your sudo
-# password once; after that the orchestrator can start and stop sharing
+# Installs Orca's internet-sharing helper. Asks for your sudo
+# password once; after that Orca can start and stop sharing
 # without one.
 set -e
-HELPER="$HOME/.orchestrator/share_helper.py"
+HELPER="$HOME/.orca/share_helper.py"
 USER_NAME="$(id -un)"
-echo "This installs /usr/local/sbin/orchestrator-share (owned by root) and a"
+echo "This installs /usr/local/sbin/orca-share (owned by root) and a"
 echo "sudoers rule that lets $USER_NAME run just that program without a"
 echo "password. It only accepts checked arguments (see the file's header)."
 echo
@@ -46,12 +46,23 @@ if ! command -v dnsmasq >/dev/null && [ ! -x /usr/sbin/dnsmasq ]; then
     echo "Installing dnsmasq-base (the DHCP server)..."
     sudo apt-get install -y dnsmasq-base
 fi
-sudo install -o root -g root -m 0755 "$HELPER" /usr/local/sbin/orchestrator-share
+sudo install -o root -g root -m 0755 "$HELPER" /usr/local/sbin/orca-share
 RULE="$(mktemp)"
-echo "$USER_NAME ALL=(root) NOPASSWD: /usr/local/sbin/orchestrator-share" > "$RULE"
+echo "$USER_NAME ALL=(root) NOPASSWD: /usr/local/sbin/orca-share" > "$RULE"
 sudo visudo -cf "$RULE" >/dev/null
-sudo install -o root -g root -m 0440 "$RULE" /etc/sudoers.d/orchestrator-share
+sudo install -o root -g root -m 0440 "$RULE" /etc/sudoers.d/orca-share
 rm -f "$RULE"
+# The helper from before the rename to Orca: stop what it shares, remove it.
+OLD=/usr/local/sbin/orchestrator-share
+if [ -e "$OLD" ]; then
+    echo "Removing the old orchestrator-share helper..."
+    for NAME in $(sudo python3 "$OLD" status | python3 -c 'import json, sys
+for session in json.load(sys.stdin).get("sessions", []):
+    print(session["name"])'); do
+        sudo python3 "$OLD" down --name "$NAME" || true
+    done
+    sudo rm -f "$OLD" /etc/sudoers.d/orchestrator-share
+fi
 echo
 echo "Done: internet sharing is ready. You can close this terminal."
 '''
@@ -97,8 +108,8 @@ def devicesOn(session: dict) -> list:
 
 class Sharing:
 
-    def __init__(self, orchestrator):
-        self.orchestrator = orchestrator
+    def __init__(self, orca):
+        self.orca = orca
         with open(HELPER_SOURCE_PATH, 'rb') as file:
             self.helper_bytes = file.read()
         self.helper_hash = hashlib.sha256(self.helper_bytes).hexdigest()[:12]
@@ -114,13 +125,13 @@ class Sharing:
                                  {'expected_hash': self.helper_hash})
         status['suggested_subnet'] = suggestSubnet(status.get('ports', []))
         status['options'] = self.savedOptions(link.machine.id)
-        book = self.orchestrator.finder.book
+        book = self.orca.finder.book
         owners = {mac: machine_id for machine_id in book.machines
                   for mac in book.macs(machine_id)}
         new_macs = []
         for session in status.get('sessions', []):
             for lease in session.get('leases', []):
-                self.orchestrator.devices.see(
+                self.orca.devices.see(
                     lease['mac'], lease['address'], 'lease',
                     lease.get('hostname'), link.machine.id)
             session['devices'] = devicesOn(session)
@@ -138,12 +149,12 @@ class Sharing:
     def wakeMissing(self):
         '''A known machine just appeared on a shared port: retry it now
         instead of waiting out its back-off.'''
-        for link in self.orchestrator.finder.missingLinks():
+        for link in self.orca.finder.missingLinks():
             link.requestReconnect()
 
     def leaseNeighbours(self) -> dict:
         '''{address: mac} from the local machine's shares, for the finder.'''
-        link = self.orchestrator.links_by_id.get('local')
+        link = self.orca.links_by_id.get('local')
         status = (link.state.get('sharing') if link else None) or {}
         return {device['address']: device['mac']
                 for session in status.get('sessions', [])
@@ -152,11 +163,11 @@ class Sharing:
     # --- Starting and stopping ---
 
     def savedOptions(self, machine_id: str) -> dict:
-        return (self.orchestrator.settings.get('sharing') or {}).get(
+        return (self.orca.settings.get('sharing') or {}).get(
             machine_id) or {}
 
     async def up(self, machine_id: str, options: dict) -> dict:
-        link = self.orchestrator.link(machine_id)
+        link = self.orca.link(machine_id)
         if not options.get('downstream'):
             raise PlanError('choose the port to share on')
         params = {
@@ -171,18 +182,18 @@ class Sharing:
         result = await link.call('share.up', params, timeout_s=60)
         # Remember the choices for next time (replaced, not merged, so a
         # cleared option stays cleared).
-        settings = self.orchestrator.settings
+        settings = self.orca.settings
         settings['sharing'] = dict(settings.get('sharing') or {})
         settings['sharing'][machine_id] = {
             key: value for key, value in params.items()
             if value not in (None, False)}
         saveSettings(settings)
-        self.orchestrator.publish('settings', settings)
+        self.orca.publish('settings', settings)
         await self.refresh(link)
         return result
 
     async def down(self, machine_id: str, name: str) -> dict:
-        link = self.orchestrator.link(machine_id)
+        link = self.orca.link(machine_id)
         result = await link.call('share.down', {'name': name or DEFAULT_NAME},
                                  timeout_s=60)
         await self.refresh(link)
@@ -191,7 +202,7 @@ class Sharing:
     async def installCommand(self, machine_id: str) -> list:
         '''Copy the helper and its install script to the machine; returns
         the command to run in a terminal there (it asks for sudo).'''
-        link = self.orchestrator.link(machine_id)
+        link = self.orca.link(machine_id)
         await link.call('file.write', {
             'path': HELPER_REMOTE_PATH,
             'content': self.helper_bytes.decode()})

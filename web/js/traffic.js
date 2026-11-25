@@ -1,5 +1,5 @@
 // Recent traffic per machine interface, for the network page's sparklines.
-// Fed from every "machine" event (the orchestrator adds rx_bps/tx_bps per
+// Fed from every "machine" event (Orca adds rx_bps/tx_bps per
 // interface).
 
 const MAX_POINTS = 90;

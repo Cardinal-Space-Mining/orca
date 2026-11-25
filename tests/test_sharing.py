@@ -1,5 +1,5 @@
 '''Internet sharing: the root helper's checks and the pieces it builds, and
-how the orchestrator suggests subnets and lists devices.'''
+how Orca suggests subnets and lists devices.'''
 
 import importlib.util
 import ipaddress
@@ -69,7 +69,7 @@ class HelperTest(unittest.TestCase):
                 helper.checkSubnet(subnet, 'nothing')
 
 
-class OrchestratorSideTest(unittest.TestCase):
+class OrcaSideTest(unittest.TestCase):
 
     def test_suggest_subnet_avoids_networks_in_use(self):
         ports = [{'name': 'eth0', 'ipv4': ['10.11.11.40/24']},

@@ -68,14 +68,14 @@ rule with `visudo` before installing it, so a typo can't break sudo.
 
 ```bash
 # mac
-ssh -t sams-mac-mini.local 'echo "samri ALL=(ALL) NOPASSWD: ALL" > /tmp/orchestrator-dev && sudo visudo -cf /tmp/orchestrator-dev && sudo install -m 440 -o root -g wheel /tmp/orchestrator-dev /etc/sudoers.d/90-orchestrator-dev && rm /tmp/orchestrator-dev'
+ssh -t sams-mac-mini.local 'echo "samri ALL=(ALL) NOPASSWD: ALL" > /tmp/orca-dev && sudo visudo -cf /tmp/orca-dev && sudo install -m 440 -o root -g wheel /tmp/orca-dev /etc/sudoers.d/90-orca-dev && rm /tmp/orca-dev'
 
 # VM
-ssh -t samri@10.180.0.82 'echo "samri ALL=(ALL) NOPASSWD: ALL" > /tmp/orchestrator-dev && sudo visudo -cf /tmp/orchestrator-dev && sudo install -m 440 -o root -g root /tmp/orchestrator-dev /etc/sudoers.d/90-orchestrator-dev && rm /tmp/orchestrator-dev'
+ssh -t samri@10.180.0.82 'echo "samri ALL=(ALL) NOPASSWD: ALL" > /tmp/orca-dev && sudo visudo -cf /tmp/orca-dev && sudo install -m 440 -o root -g root /tmp/orca-dev /etc/sudoers.d/90-orca-dev && rm /tmp/orca-dev'
 ```
 
 Check with `ssh m2-mac sudo -n true && ssh m2-vm sudo -n true`. Undo with
-`sudo rm /etc/sudoers.d/90-orchestrator-dev` on each machine.
+`sudo rm /etc/sudoers.d/90-orca-dev` on each machine.
 
 ## 4. User lingering on the VM
 

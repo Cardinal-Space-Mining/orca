@@ -16,12 +16,12 @@ import time
 from .runs import PlanError
 
 
-SCRIPT_REMOTE_PATH = '~/.orchestrator/setup-%s.sh'
+SCRIPT_REMOTE_PATH = '~/.orca/setup-%s.sh'
 SAFE_PATH = re.compile(r'^~?[A-Za-z0-9_./-]*$')
-CSM_VM_NEW_NAME = 'run-vm.sh.orchestrator-new'
+CSM_VM_NEW_NAME = 'run-vm.sh.orca-new'
 
 SCRIPT_START = '''#!/bin/bash
-# Written by the orchestrator: %s
+# Written by Orca: %s
 set -e
 echo "%s"
 echo
@@ -47,9 +47,9 @@ FIXES = {
         'sudo systemctl enable --now avahi-daemon\n'),
     'eee': (
         'Keep Energy Efficient Ethernet off on Realtek USB adapters',
-        "sudo tee /etc/udev/rules.d/70-orchestrator-eee.rules >/dev/null "
+        "sudo tee /etc/udev/rules.d/70-orca-eee.rules >/dev/null "
         "<<'RULE'\n"
-        '# Written by the orchestrator: RTL8153/8156 USB Ethernet adapters '
+        '# Written by Orca: RTL8153/8156 USB Ethernet adapters '
         'drop packets with Energy Efficient Ethernet on.\n'
         'ACTION=="add", SUBSYSTEM=="net", DRIVERS=="r8152", '
         'RUN+="/usr/sbin/ethtool --set-eee $name eee off"\n'
@@ -109,8 +109,8 @@ def localRunVm() -> str:
 
 class Setup:
 
-    def __init__(self, orchestrator):
-        self.orchestrator = orchestrator
+    def __init__(self, orca):
+        self.orca = orca
 
     async def refresh(self, link):
         machine = link.machine
@@ -119,7 +119,7 @@ class Setup:
             'csm_vm_path': machine.vm.csm_vm_path if machine.vm else None,
             'tags': machine.setup,
             'is_local': machine.is_local,
-            'share_helper_hash': self.orchestrator.sharing.helper_hash,
+            'share_helper_hash': self.orca.sharing.helper_hash,
         }, timeout_s=60)
         for check in result['checks']:
             check['fix'] = self.fixFor(check['id'])
@@ -141,7 +141,7 @@ class Setup:
         '''Write the fix script to the machine; returns the command to run
         it in a terminal there.'''
         if check_id == 'sharing':
-            return await self.orchestrator.sharing.installCommand(
+            return await self.orca.sharing.installCommand(
                 link.machine.id)
         if check_id == 'csm-vm':
             title, body = await self.pushRunVm(link)

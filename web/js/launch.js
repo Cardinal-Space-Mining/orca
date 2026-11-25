@@ -282,7 +282,7 @@ export function LaunchView({ state, onLaunched, initialId = null }) {
             <div>
                 <h1>Launch</h1>
                 <p>Scenarios from <span class="mono">
-                    src/project/orchestrator/scenarios</span>: one launch can
+                    src/project/orca/scenarios</span>: one launch can
                     start processes on several machines.</p>
             </div>
             <a class="button" href="#/launch/edit"><${Icon} name="plus"

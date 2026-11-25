@@ -9,10 +9,10 @@ import { html, getJson, postJson } from './common.js';
 
 const SCOPES = [
     { id: 'project', label: 'Team machines',
-      help: 'src/project/orchestrator/machines.json: shared with the team '
+      help: 'src/project/orca/machines.json: shared with the team '
           + 'through git (commit it after editing).' },
     { id: 'user', label: 'My machines',
-      help: '~/.config/orchestrator/machines.json: only on this laptop. '
+      help: '~/.config/orca/machines.json: only on this laptop. '
           + 'Entries here replace team entries with the same id.' },
 ];
 
@@ -80,7 +80,7 @@ function ConfigAddresses({ value, onChange }) {
     return html`
         <div class="section-head"><span>Config addresses</span></div>
         <p class="faint small-note">lance config constants that hold this
-            machine's address. Launches from the orchestrator fill them with
+            machine's address. Launches from Orca fill them with
             its current address, so the config files can be out of date.</p>
         ${entries.map(([name, kind], index) => html`
             <div class="config-address-row" key=${index}>
@@ -212,7 +212,7 @@ function MachineForm({ entry, ids, onChange, onRemove }) {
                         <${TextField} label="Host key name"
                             value=${entry.host_key_alias} mono
                             placeholder=${`${entry.id || 'robot-vm'}`
-                                + '.orchestrator'}
+                                + '.orca'}
                             onChange=${set('host_key_alias')} />
                     </div>
                     <div class="check-row">${SETUP_TAGS.map(([tag, label]) =>

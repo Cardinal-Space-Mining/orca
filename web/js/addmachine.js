@@ -8,7 +8,7 @@ import { SETUP_TAGS } from './inventory.js';
 import { openTerminal } from './terminals.js';
 
 
-const USER_KEY = 'orchestrator.add-machine-user';
+const USER_KEY = 'orca.add-machine-user';
 const STEPS = [['find', 'Find it'], ['connect', 'Connect'],
     ['review', 'Review'], ['done', 'Done']];
 
@@ -323,7 +323,7 @@ function ConnectStep({ state, target, onReady, onBack }) {
             : taken.has(id) ? 'already in the inventory' : null;
     const request = {
         address: target.address, port: target.port, via: target.via,
-        user, id, label, host_key_alias: `${id}.orchestrator`,
+        user, id, label, host_key_alias: `${id}.orca`,
     };
 
     async function step(name, action) {

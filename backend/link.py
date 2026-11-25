@@ -1,5 +1,5 @@
 '''
-Links from the orchestrator to each machine's agent.
+Links from Orca to each machine's agent.
 
 A MachineLink keeps one agent connection alive: it tries the machine's routes
 in order, installs or updates the agent when needed, polls status while
@@ -25,8 +25,8 @@ FIRST_EVENT_TIMEOUT_S = 20.0
 CALL_TIMEOUT_S = 15.0
 DEPLOY_TIMEOUT_S = 30.0
 RECONNECT_DELAYS_S = [2, 5, 10, 20]
-# Polling periods: (normal, competition mode). Competition mode keeps the
-# orchestrator's own traffic on the robot's link small.
+# Polling periods: (normal, competition mode). Competition mode keeps
+# Orca's own traffic on the robot's link small.
 STATS_INTERVAL_S = (2.0, 10.0)
 PING_PERIOD_S = (5.0, 15.0)
 VM_PERIOD_S = (5.0, 15.0)
@@ -83,7 +83,7 @@ class AgentConnection:
         self.first_event = asyncio.get_running_loop().create_future()
         self.closed = asyncio.Event()
         self.stderr_lines = collections.deque(maxlen=20)
-        # Payload bytes through this connection, for the orchestrator's own
+        # Payload bytes through this connection, for Orca's own
         # traffic.
         self.bytes_received = 0
         self.bytes_sent = 0
@@ -193,7 +193,7 @@ class AgentConnection:
 
 
 class ProcessMirror:
-    """The orchestrator's copy of one agent process: its latest record and
+    """Orca's copy of one agent process: its latest record and
     recent output lines, numbered as the agent numbers them."""
 
     def __init__(self, record: dict):
@@ -245,11 +245,11 @@ class ProcessMirror:
 
 
 class MachineLink:
-    """Keeps the orchestrator connected to one machine and holds its latest
+    """Keeps Orca connected to one machine and holds its latest
     state."""
 
-    def __init__(self, orchestrator, machine: Machine):
-        self.orchestrator = orchestrator
+    def __init__(self, orca, machine: Machine):
+        self.orca = orca
         self.machine = machine
         self.connection: Optional[AgentConnection] = None
         self.active_route: Optional[Route] = None
@@ -265,7 +265,7 @@ class MachineLink:
                            'rtt_ms': None, 'clock_offset_ms': None,
                            'agent_hash': None, 'update_pending': False,
                            'unknown_host_key': None, 'error_details': None,
-                           'orchestrator_kbps': None},
+                           'orca_kbps': None},
             'info': None,
             'stats': None,
             'workspace': None,
@@ -280,11 +280,11 @@ class MachineLink:
 
     def snapshot(self) -> dict:
         return dict(self.state, machine=self.machine.toJson(),
-                    addresses=self.orchestrator.finder.book.snapshot(
+                    addresses=self.orca.finder.book.snapshot(
                         self.machine.id))
 
     def publish(self):
-        self.orchestrator.publish('machine', self.snapshot())
+        self.orca.publish('machine', self.snapshot())
 
     def setConnection(self, **changes):
         connection = self.state['connection']
@@ -353,11 +353,11 @@ class MachineLink:
         direct = [route for route in self.machine.routes if not route.via]
         jumps = [route for route in self.machine.routes if route.via]
         return (direct
-                + await self.orchestrator.finder.foundRoutes(self.machine)
+                + await self.orca.finder.foundRoutes(self.machine)
                 + jumps)
 
     async def connectAnyRoute(self) -> bool:
-        finder = self.orchestrator.finder
+        finder = self.orca.finder
         routes = await self.candidateRoutes()
         if not routes:
             self.setConnection(
@@ -453,9 +453,9 @@ class MachineLink:
 
     def attachCommand(self, route: Optional[Route]) -> list:
         if route is None:
-            return [sys.executable, '-u', self.orchestrator.agent_path,
+            return [sys.executable, '-u', self.orca.agent_path,
                     'attach']
-        return sshCommand(route, self.orchestrator.jumpRouteFor,
+        return sshCommand(route, self.orca.jumpRouteFor,
                           ATTACH_COMMAND)
 
     # --- Agent install and update ---
@@ -494,17 +494,17 @@ class MachineLink:
             return 'failed'
 
         hello = first['data']
-        if hello['agent_hash'] == self.orchestrator.agent_hash:
+        if hello['agent_hash'] == self.orca.agent_hash:
             self.setConnection(agent_hash=hello['agent_hash'],
                                update_pending=False, error=None)
             return 'ready'
         return await self.updateAgent(hello, connection, route)
 
     async def updateAgent(self, hello, connection, route) -> str:
-        """The agent runs different code than the orchestrator's copy: replace
+        """The agent runs different code than Orca's copy: replace
         the file if it differs, then restart the daemon unless it's busy."""
         if route is not None \
-                and hello['file_hash'] != self.orchestrator.agent_hash:
+                and hello['file_hash'] != self.orca.agent_hash:
             if not await self.deploy(route):
                 return 'failed'
         if not hello['is_idle']:
@@ -528,12 +528,12 @@ class MachineLink:
             return True
         self.setConnection(state='installing agent')
         process = await asyncio.create_subprocess_exec(
-            *sshCommand(route, self.orchestrator.jumpRouteFor, DEPLOY_COMMAND),
+            *sshCommand(route, self.orca.jumpRouteFor, DEPLOY_COMMAND),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE)
         try:
             _, stderr = await asyncio.wait_for(
-                process.communicate(self.orchestrator.agent_bytes),
+                process.communicate(self.orca.agent_bytes),
                 DEPLOY_TIMEOUT_S)
         except asyncio.TimeoutError:
             process.kill()
@@ -558,7 +558,7 @@ class MachineLink:
         route = self.unknownKeyRoute()
         if route is None:
             raise ValueError('no route is waiting for a host key')
-        return await scanHostKeys(route, self.orchestrator.jumpRouteFor)
+        return await scanHostKeys(route, self.orca.jumpRouteFor)
 
     async def trustHostKey(self, expected_fingerprints: list) -> None:
         """Add the scanned keys to ~/.ssh/known_hosts under the route's name,
@@ -567,7 +567,7 @@ class MachineLink:
         if sorted(scanned['fingerprints']) != sorted(expected_fingerprints):
             raise ValueError('the host keys changed since they were shown')
         trustHostKeys(scanned['name'], scanned['keys'])
-        self.orchestrator.finder.forgetKnownHosts()
+        self.orca.finder.forgetKnownHosts()
         self.requestReconnect()
 
     # --- While connected ---
@@ -599,7 +599,7 @@ class MachineLink:
 
     async def syncProcesses(self, connection):
         """Catch up after (re)connecting: watch live output first, then fetch
-        whatever was printed while the orchestrator was away."""
+        whatever was printed while Orca was away."""
         await connection.call('process.watch', self.watchParams())
         for record in await connection.call('process.list'):
             self.onProcessState(record)
@@ -613,7 +613,7 @@ class MachineLink:
                 'lines': backlog['lines']})
 
     def period(self, periods: tuple) -> float:
-        competition = self.orchestrator.settings['competition_mode']
+        competition = self.orca.settings['competition_mode']
         return periods[1 if competition else 0]
 
     def pollTasks(self) -> list:
@@ -651,10 +651,10 @@ class MachineLink:
 
     def watchParams(self) -> dict:
         '''Live output from every process, except in competition mode, where
-        other machines only stream the orchestrator's monitor (output can still
+        other machines only stream Orca's monitor (output can still
         be fetched on demand).'''
         if self.machine.is_local \
-                or not self.orchestrator.settings['competition_mode']:
+                or not self.orca.settings['competition_mode']:
             return {'enabled': True}
         return {'enabled': False, 'process_ids': [MONITOR_PROCESS_ID]}
 
@@ -689,11 +689,11 @@ class MachineLink:
         offset_s = reply['time_s'] - (sent_s + received_s) / 2.0
         self.setConnection(rtt_ms=(received_s - sent_s) * 1000.0,
                            clock_offset_ms=offset_s * 1000.0,
-                           orchestrator_kbps=self.orchestratorTrafficKbps(
+                           orca_kbps=self.orcaTrafficKbps(
                                received_s))
 
-    def orchestratorTrafficKbps(self, now_s: float):
-        '''The orchestrator's own payload traffic with this machine since the
+    def orcaTrafficKbps(self, now_s: float):
+        '''Orca's own payload traffic with this machine since the
         last call (SSH adds a little on top).'''
         connection = self.connection
         total = connection.bytes_received + connection.bytes_sent
@@ -713,14 +713,14 @@ class MachineLink:
         '''Devices this machine has talked to, for the network map.'''
         neighbours = await self.call('net.neighbours')
         for address, mac in neighbours.items():
-            self.orchestrator.devices.see(mac, address, 'neighbour',
-                                          seen_by=self.machine.id)
+            self.orca.devices.see(mac, address, 'neighbour',
+                                  seen_by=self.machine.id)
 
     async def refreshSetup(self):
-        await self.orchestrator.setup.refresh(self)
+        await self.orca.setup.refresh(self)
 
     async def refreshSharing(self):
-        await self.orchestrator.sharing.refresh(self)
+        await self.orca.sharing.refresh(self)
 
     async def refreshVm(self):
         self.state['vm'] = await self.call(
@@ -733,25 +733,25 @@ class MachineLink:
         if name == 'stats':
             self.addInterfaceRates(data)
             self.state['stats'] = data
-            self.orchestrator.budget.onStats(self.machine.id, data)
+            self.orca.budget.onStats(self.machine.id, data)
             if not self.machine.is_local:
-                self.orchestrator.finder.onStats(self.machine.id, data,
-                                                 self.active_route)
+                self.orca.finder.onStats(self.machine.id, data,
+                                         self.active_route)
             self.publish()
         elif name == 'process.state':
             self.onProcessState(data)
         elif name == 'process.output':
             self.onProcessOutput(data)
         elif name == 'terminal.output':
-            self.orchestrator.publish('terminal.output',
-                                      dict(data, machine_id=self.machine.id))
+            self.orca.publish('terminal.output',
+                              dict(data, machine_id=self.machine.id))
         elif name == 'terminal.exit':
             self.terminals.discard(data['terminal_id'])
             if data['terminal_id'] in self.setup_terminals:
                 self.setup_terminals.discard(data['terminal_id'])
                 asyncio.ensure_future(self.refreshAfterFix())
-            self.orchestrator.publish('terminal.exit',
-                                      dict(data, machine_id=self.machine.id))
+            self.orca.publish('terminal.exit',
+                              dict(data, machine_id=self.machine.id))
 
     async def refreshAfterFix(self):
         try:
@@ -785,7 +785,7 @@ class MachineLink:
     def endTerminals(self):
         '''Terminals live on the connection; tell the browser they ended.'''
         for terminal_id in list(self.terminals):
-            self.orchestrator.publish('terminal.exit', {
+            self.orca.publish('terminal.exit', {
                 'machine_id': self.machine.id, 'terminal_id': terminal_id,
                 'exit_code': None, 'reason': 'connection lost'})
         self.terminals.clear()
@@ -796,7 +796,7 @@ class MachineLink:
             mirror = self.processes[record['process_id']] = \
                 ProcessMirror(record)
         mirror.record = record
-        self.orchestrator.onProcessState(self.machine.id, record)
+        self.orca.onProcessState(self.machine.id, record)
 
     def onProcessOutput(self, data: dict):
         mirror = self.processes.get(data['process_id'])
@@ -804,7 +804,7 @@ class MachineLink:
             return
         mirror.merge(data['first_line_number'], data['lines'])
         if data['process_id'] == MONITOR_PROCESS_ID:
-            self.orchestrator.budget.onMonitorLines(data['lines'])
+            self.orca.budget.onMonitorLines(data['lines'])
             return
-        self.orchestrator.publish('output',
-                                  dict(data, machine_id=self.machine.id))
+        self.orca.publish('output',
+                          dict(data, machine_id=self.machine.id))

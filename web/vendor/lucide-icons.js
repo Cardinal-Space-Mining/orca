@@ -1,6 +1,6 @@
 // Lucide icons (https://lucide.dev), version 1.79.0, ISC license (LICENSE-lucide).
 // The inner markup of each 24x24 icon; drawn with stroke="currentColor".
-// Only the icons the orchestrator uses: add more from lucide-static's icons/.
+// Only the icons Orca uses: add more from lucide-static's icons/.
 export const ICONS = {
     "activity": "<path d=\"M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2\" />",
     "apple": "<path d=\"M12 6.528V3a1 1 0 0 1 1-1h0\" /> <path d=\"M18.237 21A15 15 0 0 0 22 11a6 6 0 0 0-10-4.472A6 6 0 0 0 2 11a15.1 15.1 0 0 0 3.763 10 3 3 0 0 0 3.648.648 5.5 5.5 0 0 1 5.178 0A3 3 0 0 0 18.237 21\" />",

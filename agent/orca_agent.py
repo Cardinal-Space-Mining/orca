@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 '''
-orchestrator agent.
+Orca agent.
 
-Runs on every machine the orchestrator manages: the robot's mac host, its
-Ubuntu VM, client laptops, and the orchestrator's own machine. It is one file
-that uses only the standard library, so the orchestrator can copy it over SSH
+Runs on every machine Orca manages: the robot's mac host, its
+Ubuntu VM, client laptops, and Orca's own machine. It is one file
+that uses only the standard library, so Orca can copy it over SSH
 and run it with any Python 3.9+, including macOS's /usr/bin/python3.
 
 Modes (first command-line argument):
     daemon   Long-running server. Answers requests on a unix socket and will
-             own the processes the orchestrator starts, so they outlive the
-             orchestrator's connection.
+             own the processes Orca starts, so they outlive
+             Orca's connection.
     attach   Bridges stdin/stdout to the daemon's socket, starting the daemon
-             first if it isn't running. The orchestrator runs this over SSH, so
+             first if it isn't running. Orca runs this over SSH, so
              the agent never opens a network port and SSH keys are the only
              authentication.
-    hash     Prints the hash of this file (the orchestrator compares it with
+    hash     Prints the hash of this file (Orca compares it with
              its copy).
 
 Protocol: one JSON object per line, in both directions.
@@ -59,9 +59,9 @@ import time
 PROTOCOL_VERSION = 2
 
 AGENT_PATH = os.path.abspath(__file__)
-# ORCHESTRATOR_AGENT_DIR lets tests run an agent beside the real one.
-AGENT_DIR = os.environ.get('ORCHESTRATOR_AGENT_DIR') \
-    or os.path.join(os.path.expanduser('~'), '.orchestrator')
+# ORCA_AGENT_DIR lets tests run an agent beside the real one.
+AGENT_DIR = os.environ.get('ORCA_AGENT_DIR') \
+    or os.path.join(os.path.expanduser('~'), '.orca')
 SOCKET_PATH = os.path.join(AGENT_DIR, 'agent.sock')
 # Unix socket paths are limited to ~104 bytes, so the daemon and `attach`
 # both work from AGENT_DIR and use this relative name.
@@ -631,8 +631,8 @@ def workspaceStatus(path):
 
 
 def workspaceRefs(path):
-    '''Every branch, tag and remote ref of <path>/src with its commit, so the
-    orchestrator can tell whether a push would lose commits that only exist
+    '''Every branch, tag and remote ref of <path>/src with its commit, so
+    Orca can tell whether a push would lose commits that only exist
     here.'''
     repository = os.path.join(os.path.expanduser(path), 'src')
     output = git(repository, 'for-each-ref',
@@ -646,7 +646,7 @@ def workspaceRefs(path):
     for line in stashes.splitlines():
         sha, _, name = line.partition(' ')
         refs[name] = sha
-    # Refs kept as files survive a push (the orchestrator never deletes inside
+    # Refs kept as files survive a push (Orca never deletes inside
     # .git); refs only in packed-refs don't, since that file gets replaced.
     git_directory = git(repository, 'rev-parse', '--absolute-git-dir') or ''
     loose = [name for name in refs if name.startswith('stash@')
@@ -749,12 +749,14 @@ def installedRosDistros():
 
 # --- Setup checklist ------------------------------------------------------------
 
-# One-time setup a machine needs, checked without sudo. The orchestrator
+# One-time setup a machine needs, checked without sudo. Orca
 # offers a fix for most items (a script run in a terminal, where sudo can ask
 # for a password).
 
 EEE_DRIVERS = ('r8152',)  # Realtek RTL8153/8156 USB Ethernet
-EEE_UDEV_RULE = '/etc/udev/rules.d/70-orchestrator-eee.rules'
+EEE_UDEV_RULE = '/etc/udev/rules.d/70-orca-eee.rules'
+# Installed before the rename to Orca; does the same.
+OLD_EEE_UDEV_RULE = '/etc/udev/rules.d/70-orchestrator-eee.rules'
 CAN_COMMANDS = ('/usr/bin/slcand', 'link set can0 up')
 VM_COMMANDS = ('/opt/homebrew/bin/qemu-system-aarch64',
                '/opt/homebrew/bin/socat')
@@ -801,7 +803,7 @@ def setupChecks(options):
             linger = (runCommand(['loginctl', 'show-user', user, '-p',
                                   'Linger', '--value']) or '').strip()
             check('linger', 'Lingering', 'ok' if linger == 'yes' else 'todo',
-                  'Processes the orchestrator starts keep running when SSH '
+                  'Processes Orca starts keep running when SSH '
                   'sessions end.' if linger == 'yes' else
                   'Off: systemd may stop processes started over SSH when the '
                   'session ends.')
@@ -816,10 +818,11 @@ def setupChecks(options):
         check('avahi', 'mDNS name', 'ok' if avahi else 'optional',
               'Answers to %s.local.' % hostname if avahi else
               'avahi-daemon isn\'t running: %s.local doesn\'t resolve '
-              '(the orchestrator finds it anyway).' % hostname)
+              '(Orca finds it anyway).' % hostname)
         adapters = eeeInterfaces()
         if adapters:
-            has_rule = os.path.exists(EEE_UDEV_RULE)
+            has_rule = os.path.exists(EEE_UDEV_RULE) \
+                or os.path.exists(OLD_EEE_UDEV_RULE)
             on = [adapter['name'] for adapter in adapters
                   if adapter['eee_on']]
             ok = has_rule and not on
@@ -838,7 +841,7 @@ def setupChecks(options):
                   'ok' if allowed else 'todo',
                   'run.sh --canbus can bring up CAN.' if allowed else
                   'sudo asks for a password for slcand / ip link, so '
-                  'run.sh --canbus fails when started from the orchestrator.')
+                  'run.sh --canbus fails when started from Orca.')
         if 'sharing' in tags or options.get('is_local'):
             helper_hash = fileHash(SHARE_HELPER_PATH)
             current = helper_hash and helper_hash == options.get(
@@ -863,7 +866,7 @@ def setupChecks(options):
                       'ok' if current else 'todo',
                       'Supports --overlay and the serial console.' if current
                       else 'An older run-vm.sh: starting the VM from the '
-                      'orchestrator can stop at a question, and there is no '
+                      'orca can stop at a question, and there is no '
                       'serial console.')
             tools = [path for path in VM_COMMANDS if not os.path.exists(path)]
             check('vm-tools', 'QEMU and socat', 'ok' if not tools else 'todo',
@@ -874,7 +877,7 @@ def setupChecks(options):
                   'ok' if allowed else 'todo',
                   'run-vm.sh can start and stop the VM.' if allowed else
                   'sudo asks for a password for QEMU / socat, so the VM '
-                  'can\'t be started from the orchestrator.')
+                  'can\'t be started from Orca.')
     if options.get('workspace'):
         distros = installedRosDistros()
         check('ros', 'ROS 2', 'ok' if distros else 'todo',
@@ -961,9 +964,9 @@ def machineSurvey(interfaces):
 # --- Internet sharing ---------------------------------------------------------
 
 # Sharing this machine's internet over an Ethernet port goes through a small
-# root-owned helper (share_helper.py, installed by the orchestrator with a
+# root-owned helper (share_helper.py, installed by Orca with a
 # sudoers rule), so it works without a password but can't do anything else.
-SHARE_HELPER_PATH = '/usr/local/sbin/orchestrator-share'
+SHARE_HELPER_PATH = '/usr/local/sbin/orca-share'
 SHARE_SUDO_CHECK_S = 60.0
 SHARE_COMMAND_TIMEOUT_S = 40.0
 share_sudo_check = {'checked_s': 0.0, 'allowed': False, 'hash': None}
@@ -1330,7 +1333,7 @@ def listLogs(workspace):
         process = os.path.basename(path)[:-len('.log')]
         if process.startswith(run + '.'):
             process = process[len(run) + 1:]
-        entries.append(logEntry(path, 'Orchestrator runs',
+        entries.append(logEntry(path, 'Orca runs',
                                 '%s  %s' % (run, process)))
     if workspace:
         entries.extend(buildLogs(workspace))
@@ -1502,7 +1505,7 @@ def removeOldRunLogs():
 
 
 class SupervisedProcess:
-    '''One process started for the orchestrator. Runs on a pseudo-terminal so
+    '''One process started for Orca. Runs on a pseudo-terminal so
     programs line-buffer and colour their output as they would in a terminal,
     in its own process group so stopping it reaches every child (like Ctrl-C).
 
@@ -1636,7 +1639,7 @@ class SupervisedProcess:
         self.log_bytes += len(data)
         self.log_file.write(data)
         if self.log_bytes >= MAX_PROCESS_LOG_BYTES:
-            self.log_file.write(b'\n[orchestrator: log size limit reached; '
+            self.log_file.write(b'\n[orca: log size limit reached; '
                                 b'further output is not saved]\n')
         self.log_file.flush()
 
@@ -1697,7 +1700,7 @@ class SupervisedProcess:
             self.stop_task.cancel()
         summary = ('exited with code %d' % return_code if return_code >= 0
                    else 'killed by %s' % self.exit_signal)
-        self.writeLog(('\n[orchestrator: process %s]\n' % summary).encode())
+        self.writeLog(('\n[orca: process %s]\n' % summary).encode())
         self.log_file.close()
         self.manager.broadcastState(self)
 
@@ -1948,7 +1951,7 @@ class TerminalManager:
 
 
 class ClientSession:
-    '''One connected client (normally one orchestrator, through `attach`).'''
+    '''One connected client (normally one orca, through `attach`).'''
 
     def __init__(self, daemon, reader, writer):
         self.daemon = daemon
@@ -1959,7 +1962,7 @@ class ClientSession:
         self.request_tasks = set()
         # Output is only sent to clients that ask for it (see process.watch),
         # so a status-only client costs almost no bandwidth: all processes,
-        # or only some (competition mode watches just the orchestrator's
+        # or only some (competition mode watches just Orca's
         # monitor).
         self.watches_output = False
         self.watched_ids = set()
@@ -2077,7 +2080,7 @@ class Daemon:
         }
 
     def isIdle(self):
-        '''True when no orchestrator-started processes are running, so the
+        '''True when no Orca-started processes are running, so the
         daemon can be restarted (e.g. to update it) without disturbing
         anything.'''
         return self.processes.numRunning() == 0
@@ -2136,7 +2139,7 @@ class Daemon:
 
     async def methodProcessStart(self, session, params):
         '''params: process_id, argv, cwd, env, label, meta (returned as is;
-        the orchestrator keeps its run information there).'''
+        Orca keeps its run information there).'''
         return self.processes.start(params)
 
     async def methodProcessStop(self, session, params):

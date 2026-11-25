@@ -6,7 +6,7 @@ from backend.budget import BudgetTracker
 from backend.settings import DEFAULTS
 
 
-class FakeOrchestrator:
+class FakeOrca:
 
     def __init__(self):
         self.settings = {'budget': dict(DEFAULTS['budget'])}
@@ -26,15 +26,15 @@ def bandwidth(side, tx, rx):
 class BudgetTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_limit_counts_cameras(self):
-        tracker = BudgetTracker(FakeOrchestrator())
+        tracker = BudgetTracker(FakeOrca())
         tracker.settings()['num_cameras'] = 2
         self.assertEqual(tracker.limitKbps(), 3000)
 
     async def test_interface_average(self):
-        orchestrator = FakeOrchestrator()
-        orchestrator.settings['budget']['interface'] = {
+        orca = FakeOrca()
+        orca.settings['budget']['interface'] = {
             'machine_id': 'vm', 'name': 'wlan0'}
-        tracker = BudgetTracker(orchestrator)
+        tracker = BudgetTracker(orca)
         for time_s, bps in ((1.0, 1000.0), (2.0, 3000.0)):
             tracker.onStats('vm', {'time_s': time_s, 'interfaces': [
                 {'name': 'wlan0', 'rx_bps': bps, 'tx_bps': 0.0,
@@ -47,9 +47,9 @@ class BudgetTest(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(summary['peak_kbps'], 3.0)
 
     async def test_client_side_preferred(self):
-        tracker = BudgetTracker(FakeOrchestrator())
+        tracker = BudgetTracker(FakeOrca())
         tracker.onMonitorLines(
-            ['noise', '[monitor] ORCHESTRATOR {"type": "ready"}'])
+            ['noise', '[monitor] ORCA {"type": "ready"}'])
         self.assertEqual(tracker.monitor['state'], 'listening')
         tracker.onMonitorMessage(bandwidth('client', 100, 0))
         tracker.onMonitorMessage(bandwidth('robot', 999, 0))  # ignored

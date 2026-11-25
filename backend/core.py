@@ -1,5 +1,5 @@
 '''
-The orchestrator: owns one MachineLink per machine, the runs it has started,
+Orca: owns one MachineLink per machine, the runs it has started,
 and fans every update out to the browser windows that are listening.
 '''
 
@@ -32,17 +32,17 @@ from .sharing import Sharing
 from .vm import VmController
 
 
-ORCHESTRATOR_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-AGENT_SOURCE_PATH = os.path.join(ORCHESTRATOR_ROOT, 'agent',
-                                 'orchestrator_agent.py')
-MONITOR_SOURCE_PATH = os.path.join(ORCHESTRATOR_ROOT, 'backend',
+ORCA_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+AGENT_SOURCE_PATH = os.path.join(ORCA_ROOT, 'agent',
+                                 'orca_agent.py')
+MONITOR_SOURCE_PATH = os.path.join(ORCA_ROOT, 'backend',
                                    'ros_monitor.py')
 SUBSCRIBER_QUEUE_SIZE = 5000
 NETWORK_PUBLISH_PERIOD_S = 2.0
 MAX_FINISHED_RUNS = 20
 
 
-class Orchestrator:
+class Orca:
 
     def __init__(self, machines: list, workspace_root: Optional[str],
                  inventory_paths: list):
@@ -112,7 +112,7 @@ class Orchestrator:
             try:
                 model = self.networkModel()
             except Exception as error:  # keep the loop alive; show why
-                print('[ORCHESTRATOR]: network map failed: %r' % error,
+                print('[ORCA]: network map failed: %r' % error,
                       flush=True)
                 continue
             encoded = json.dumps(model, sort_keys=True)
@@ -126,14 +126,14 @@ class Orchestrator:
         return self.links_by_id[machine_id].jumpRoute()
 
     def referenceHead(self) -> Optional[str]:
-        '''Commit of the orchestrator's own workspace (what previews are based
+        '''Commit of Orca's own workspace (what previews are based
         on).'''
         local = self.links_by_id.get('local')
         workspace = local.state['workspace'] if local else None
         return workspace.get('head') if workspace else None
 
     def referenceFingerprint(self) -> Optional[str]:
-        '''Code fingerprint of the orchestrator's own workspace.'''
+        '''Code fingerprint of Orca's own workspace.'''
         local = self.links_by_id.get('local')
         workspace = local.state['workspace'] if local else None
         return workspace.get('fingerprint') if workspace else None
@@ -176,7 +176,7 @@ class Orchestrator:
 
     def snapshot(self) -> dict:
         return {
-            'orchestrator': {
+            'orca': {
                 'hostname': socket.gethostname(),
                 'workspace': self.workspace_root,
                 'inventory_paths': [
@@ -275,7 +275,7 @@ class Orchestrator:
         return {'ok': True}
 
     def files(self) -> list:
-        """The files the orchestrator reads and writes, for the Settings
+        """The files Orca reads and writes, for the Settings
         page."""
         workspace = self.workspace_root
         entries = [
@@ -314,7 +314,7 @@ class Orchestrator:
         with open(MONITOR_SOURCE_PATH) as file:
             source = file.read()
         script = await link.call('file.write', {
-            'path': '~/.orchestrator/ros_monitor.py', 'content': source})
+            'path': '~/.orca/ros_monitor.py', 'content': source})
         command = ('source /opt/ros/%s/setup.bash && source %s/install/'
                    'setup.bash && ' % (distro, root))
         if self.settings['budget']['monitor_local_dds']:
@@ -442,8 +442,8 @@ class Orchestrator:
             del self.runs[run_id]
 
     def onProcessState(self, machine_id: str, record: dict):
-        '''Route an agent's process update to its run, recreating runs the
-        orchestrator doesn't know (it restarted while they were running).'''
+        '''Route an agent's process update to its run, recreating runs
+        Orca doesn't know (it restarted while they were running).'''
         if record['process_id'] == MONITOR_PROCESS_ID:
             self.onMonitorState(machine_id, record)
             return
@@ -481,7 +481,7 @@ class Orchestrator:
     async def processOutput(self, machine_id: str, process_id: str,
                             from_line: int, refresh: bool = False) -> dict:
         '''Buffered output. With refresh, first fetch what the agent has that
-        the orchestrator didn't stream (competition mode pauses streaming).'''
+        Orca didn't stream (competition mode pauses streaming).'''
         link = self.link(machine_id)
         mirror = link.processes.get(process_id)
         if mirror is None:

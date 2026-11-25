@@ -1,5 +1,5 @@
 // The deploy page: copy this workspace's src/ to other machines (rsync over
-// the orchestrator's SSH routes) and build there.
+// Orca's SSH routes) and build there.
 
 import { useState } from 'preact/hooks';
 import { html, formatAgo, postJson, shortCommit, StatusDot }
@@ -80,7 +80,7 @@ function Comparison({ result }) {
                         `${entry.ref} ${entry.sha}`}</span>`)}</div>`}
             ${kept.length > 0 && html`
                 <div class="muted small">Kept there (only that machine has
-                    them; the orchestrator never deletes inside .git):
+                    them; Orca never deletes inside .git):
                     ${kept.map((entry) => html` <span class="mono">${
                         entry.ref}</span>`)}</div>`}
             <div class="change-list mono">

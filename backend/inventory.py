@@ -1,13 +1,13 @@
 '''
-Machine inventory: which machines the orchestrator manages and how to find
+Machine inventory: which machines Orca manages and how to find
 them.
 
 Two files are merged, the second overriding entries of the first by id:
-    <workspace>/src/project/orchestrator/machines.json
+    <workspace>/src/project/orca/machines.json
             the team's machines (versioned with the code they run)
-    ~/.config/orchestrator/machines.json
+    ~/.config/orca/machines.json
             this user's own machines, e.g. a personal test rig
-The orchestrator's own machine is always present as "local".
+Orca's own machine is always present as "local".
 
 Addresses change (DHCP), so the inventory says how to find a machine rather
 than where it is: names and addresses to try first, and the SSH host key that
@@ -26,7 +26,7 @@ File format:
                 "user": "lance",               // default for every route
                 // The name its host key is checked under, for every address
                 // (default: the first route's host).
-                "host_key_alias": "robot-vm.orchestrator",
+                "host_key_alias": "robot-vm.orca",
                 "routes": [                    // tried first, in order
                     {"host": "lance-vm.local"},
                     {"host": "192.168.18.2", "via": "robot-mac"}
@@ -60,10 +60,10 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
-PROJECT_INVENTORY_PATH = os.path.join('src', 'project', 'orchestrator',
+PROJECT_INVENTORY_PATH = os.path.join('src', 'project', 'orca',
                                       'machines.json')
 USER_INVENTORY_PATH = os.path.expanduser(
-    '~/.config/orchestrator/machines.json')
+    '~/.config/orca/machines.json')
 LOCAL_MACHINE_ID = 'local'
 
 
@@ -236,7 +236,7 @@ def readInventoryFile(path: str) -> list:
 def localMachine(workspace_root: Optional[str]) -> Machine:
     return Machine(id=LOCAL_MACHINE_ID,
                    label=socket.gethostname().split('.')[0],
-                   role='This machine (runs the orchestrator)', is_local=True,
+                   role='This machine (runs Orca)', is_local=True,
                    workspace=workspace_root, source='built in')
 
 

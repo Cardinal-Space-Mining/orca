@@ -4,7 +4,7 @@ Where machines are right now.
 Every network here hands out addresses with DHCP, so the inventory can't
 know them for sure. Instead each machine's agent reports its own interfaces
 (address, kind, MAC) while it's connected; this module remembers them in
-~/.config/orchestrator/addresses.json, on this laptop only, and turns them
+~/.config/orca/addresses.json, on this laptop only, and turns them
 into extra routes to try when the inventory's routes don't answer:
 
     neighbour   the machine's MAC is in this laptop's neighbour (ARP) table
@@ -28,7 +28,7 @@ from typing import Optional
 from .inventory import Route
 
 
-ADDRESSES_PATH = os.path.expanduser('~/.config/orchestrator/addresses.json')
+ADDRESSES_PATH = os.path.expanduser('~/.config/orca/addresses.json')
 LEARNED_KINDS = ('ethernet', 'wifi')
 FORGET_AFTER_S = 30 * 24 * 3600
 MAX_FOUND_ROUTES = 4
@@ -240,8 +240,8 @@ class Finder:
     answer, using the address book and the local agent's view of the
     network.'''
 
-    def __init__(self, orchestrator, book: Optional[AddressBook] = None):
-        self.orchestrator = orchestrator
+    def __init__(self, orca, book: Optional[AddressBook] = None):
+        self.orca = orca
         self.book = book or AddressBook()
         self.neighbours = {}
         self.neighbours_s = 0.0
@@ -250,7 +250,7 @@ class Finder:
         self.last_discovery_s = 0.0
 
     def localLink(self):
-        return self.orchestrator.links_by_id.get('local')
+        return self.orca.links_by_id.get('local')
 
     def localInterfaces(self) -> list:
         link = self.localLink()
@@ -313,7 +313,7 @@ class Finder:
         except Exception:  # an old agent, or the local link restarting
             return
         # Devices that got an address from this machine's internet sharing.
-        neighbours.update(self.orchestrator.sharing.leaseNeighbours())
+        neighbours.update(self.orca.sharing.leaseNeighbours())
         self.neighbours = neighbours
         self.neighbours_s = time.time()
 
@@ -348,7 +348,7 @@ class Finder:
         self.discovery_task = asyncio.ensure_future(self.discover())
 
     def missingLinks(self) -> list:
-        return [link for link in self.orchestrator.links
+        return [link for link in self.orca.links
                 if not link.machine.is_local and link.connection is None
                 and self.book.macs(link.machine.id)]
 

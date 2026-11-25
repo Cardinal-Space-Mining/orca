@@ -1,7 +1,7 @@
 '''
-Start the orchestrator (from the workspace root):
+Start Orca (from the workspace root):
 
-    ./src/orchestrator/orchestrator [--port 8740] [--no-browser]
+    ./src/orchestrator/orca [--port 8740] [--no-browser]
 '''
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import subprocess
 import sys
 import webbrowser
 
-from .core import ORCHESTRATOR_ROOT, Orchestrator
+from .core import ORCA_ROOT, Orca
 from .inventory import InventoryError, inventoryPaths, loadInventory
 from .server import HttpServer
 from .settings import loadSettings
@@ -22,7 +22,7 @@ from .settings import loadSettings
 
 def openBrowser(url: str):
     """Open the page without the browser's own console messages (crash
-    reporter, GPU warnings) ending up in the orchestrator's output."""
+    reporter, GPU warnings) ending up in Orca's output."""
     opener = 'open' if sys.platform == 'darwin' else 'xdg-open'
     if shutil.which(opener):
         subprocess.Popen([opener, url], stdin=subprocess.DEVNULL,
@@ -33,8 +33,8 @@ def openBrowser(url: str):
 
 
 def detectWorkspace():
-    '''The orchestrator normally lives at <workspace>/src/orchestrator.'''
-    source_directory = os.path.dirname(ORCHESTRATOR_ROOT)
+    '''Orca normally lives at <workspace>/src/orchestrator.'''
+    source_directory = os.path.dirname(ORCA_ROOT)
     workspace_root = os.path.dirname(source_directory)
     if os.path.basename(source_directory) == 'src' \
             and os.path.isdir(os.path.join(workspace_root, 'src')):
@@ -44,7 +44,7 @@ def detectWorkspace():
 
 def parseArguments():
     parser = argparse.ArgumentParser(
-        prog='orchestrator', description='CSM robot management orchestrator')
+        prog='orca', description='Orca: the CSM robot orchestrator')
     parser.add_argument(
         '--port', type=int, default=None,
         help='web interface port (default: the Settings page\'s, 8740)')
@@ -54,7 +54,7 @@ def parseArguments():
     parser.add_argument(
         '--workspace', default=None,
         help='colcon workspace root (default: the one containing the '
-             'orchestrator)')
+             'orca)')
     parser.add_argument('--no-browser', action='store_true',
                         help="don't open a browser window")
     return parser.parse_args()
@@ -65,26 +65,37 @@ async def serve(arguments, workspace_root):
     if arguments.port is None:
         arguments.port = startup['port']
     paths = inventoryPaths(workspace_root)
-    orchestrator = Orchestrator(loadInventory(workspace_root), workspace_root,
-                                paths)
-    server = await HttpServer(orchestrator).start(arguments.bind,
-                                                  arguments.port)
+    orca = Orca(loadInventory(workspace_root), workspace_root,
+                paths)
+    server = await HttpServer(orca).start(arguments.bind,
+                                          arguments.port)
     url = 'http://%s:%d/' % (
         'localhost' if arguments.bind in ('localhost', '127.0.0.1', '0.0.0.0')
         else arguments.bind, arguments.port)
-    print('[ORCHESTRATOR]: serving on ' + url, flush=True)
-    print('[ORCHESTRATOR]: workspace: ' + (workspace_root or 'none'),
+    print('[ORCA]: serving on ' + url, flush=True)
+    print('[ORCA]: workspace: ' + (workspace_root or 'none'),
           flush=True)
     for path in paths:
         state = 'found' if os.path.isfile(path) else 'not found'
-        print('[ORCHESTRATOR]: inventory %s (%s)' % (path, state), flush=True)
+        print('[ORCA]: inventory %s (%s)' % (path, state), flush=True)
     if not arguments.no_browser and startup['open_browser']:
         openBrowser(url)
     async with server:
-        await orchestrator.run()
+        await orca.run()
+
+
+def moveOldConfig():
+    """~/.config/orchestrator (from before the rename to Orca) becomes
+    ~/.config/orca."""
+    old = os.path.expanduser('~/.config/orchestrator')
+    new = os.path.expanduser('~/.config/orca')
+    if os.path.isdir(old) and not os.path.exists(new):
+        os.rename(old, new)
+        print('[ORCA]: moved %s to %s' % (old, new), flush=True)
 
 
 def main():
+    moveOldConfig()
     arguments = parseArguments()
     workspace_root = arguments.workspace or detectWorkspace()
     if workspace_root:
@@ -92,7 +103,7 @@ def main():
     try:
         asyncio.run(serve(arguments, workspace_root))
     except InventoryError as error:
-        print('[ORCHESTRATOR]: inventory error: %s' % error, file=sys.stderr)
+        print('[ORCA]: inventory error: %s' % error, file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         pass

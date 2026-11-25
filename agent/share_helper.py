@@ -1,9 +1,9 @@
 #!/usr/bin/python3 -I
 '''
-orchestrator-share: share this machine's internet connection with devices on
-one of its Ethernet ports (NAT + DHCP), for the orchestrator.
+orca-share: share this machine's internet connection with devices on
+one of its Ethernet ports (NAT + DHCP), for Orca.
 
-The orchestrator installs it as /usr/local/sbin/orchestrator-share, owned by
+Orca installs it as /usr/local/sbin/orca-share, owned by
 root, with a sudoers rule that lets the user run it without a password. It
 takes only checked arguments and reads no file a user can write, so running
 it without a password can't be used to do anything else as root.
@@ -12,22 +12,22 @@ Everything it changes is runtime state, gone after a reboot:
   - the port's address, and NetworkManager told to leave the port alone
     (`nmcli device set <port> managed no`, not saved)
   - IP forwarding (put back when the last share stops)
-  - iptables rules tagged "orchestrator-share:<name>": NAT for the shared
+  - iptables rules tagged "orca-share:<name>": NAT for the shared
     subnet, forwarding to and from the port, DHCP and traffic from the
     subnet to this machine. Stopping removes every rule with the tag.
   - Energy Efficient Ethernet switched off on the port (USB adapters with
     RTL8153 chips drop packets with it on), put back on stop
   - its own dnsmasq, answering DHCP only (no DNS), with its files in
-    /run/orchestrator-share/<name>/. Other dnsmasq instances are left alone.
-DHCP leases are kept in /var/lib/orchestrator-share/<name>.leases, so a device
+    /run/orca-share/<name>/. Other dnsmasq instances are left alone.
+DHCP leases are kept in /var/lib/orca-share/<name>.leases, so a device
 usually gets the same address next time.
 
 Usage:
-    orchestrator-share up --name pits --downstream enx00e04c2646b5
+    orca-share up --name pits --downstream enx00e04c2646b5
         [--upstream wlp5s0] [--subnet 10.11.11.0/24] [--dns 8.8.8.8,1.1.1.1]
         [--lease 12h] [--keep-eee] [--allow-default-route]
-    orchestrator-share down --name pits
-    orchestrator-share status
+    orca-share down --name pits
+    orca-share status
 
 Each command prints one JSON object: {"ok": true, ...} or {"ok": false,
 "error": "..."} (with exit status 1). status works without root.
@@ -46,9 +46,9 @@ import sys
 import time
 
 
-STATE_ROOT = '/run/orchestrator-share'
-LEASE_ROOT = '/var/lib/orchestrator-share'
-TAG = 'orchestrator-share:'
+STATE_ROOT = '/run/orca-share'
+LEASE_ROOT = '/var/lib/orca-share'
+TAG = 'orca-share:'
 SAFE_PATH = '/usr/sbin:/usr/bin:/sbin:/bin'
 NAME_PATTERN = re.compile(r'^[a-z0-9][a-z0-9-]{0,19}$')
 INTERFACE_PATTERN = re.compile(r'^[A-Za-z0-9_.-]{1,15}$')
@@ -281,7 +281,7 @@ def startDnsmasq(state):
     os.makedirs(LEASE_ROOT, mode=0o755, exist_ok=True)
     network = ipaddress.ip_network(state['subnet'])
     writeText(conf_path, '\n'.join([
-        '# orchestrator-share ' + state['name'],
+        '# orca-share ' + state['name'],
         'port=0',                       # DHCP only: no DNS server
         'interface=' + state['downstream'],
         'except-interface=lo',
@@ -449,7 +449,7 @@ def commandStatus(arguments):
 
 def main():
     parser = argparse.ArgumentParser(
-        prog='orchestrator-share',
+        prog='orca-share',
         description="Share this machine's internet over an Ethernet port.")
     commands = parser.add_subparsers(dest='command', required=True)
     up = commands.add_parser('up')

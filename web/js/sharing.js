@@ -30,7 +30,7 @@ export function HelperNotice({ machineId, status }) {
             + 'starts and stops without one.';
     } else if (!status.helper_current) {
         message = "This machine's sharing helper is from an older version "
-            + 'of the orchestrator. Update it (asks for your sudo password).';
+            + 'of Orca. Update it (asks for your sudo password).';
     } else if (!status.sudo_ok) {
         message = "The sharing helper is installed but sudo won't run it "
             + 'without a password (the sudoers rule is missing). Install it '

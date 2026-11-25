@@ -10,7 +10,7 @@ is written.
 
 Descriptions don't go in the presets: launch-utils passes every key of a
 resolved preset to the node as a ROS parameter (FINDINGS.md L3), so they live
-in src/project/orchestrator/presets.json instead:
+in src/project/orca/presets.json instead:
 
     {
         "dev": "What the action is for",
@@ -30,7 +30,7 @@ from .lance_config import (ConfigError, DERIVED_TAG, LanceConfig,
                            OVERRIDES_TAG)
 
 
-DESCRIPTIONS_RELATIVE_PATH = os.path.join('src', 'project', 'orchestrator',
+DESCRIPTIONS_RELATIVE_PATH = os.path.join('src', 'project', 'orca',
                                           'presets.json')
 PRESET_NAME = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.-]{0,60}$')
 IMPORT_TAG = 'pragma:import'
@@ -440,7 +440,7 @@ class ConfigEditor:
         return path
 
     def write(self, path: str, text: str):
-        temporary = path + '.orchestrator-tmp'
+        temporary = path + '.orca-tmp'
         with open(temporary, 'w') as file:
             file.write(text)
         os.replace(temporary, path)

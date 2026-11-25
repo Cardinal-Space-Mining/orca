@@ -1,5 +1,5 @@
 '''The agent end to end: a real daemon in a temporary directory, reached
-through `attach` exactly as the orchestrator does over SSH.'''
+through `attach` exactly as Orca does over SSH.'''
 
 import asyncio
 import json
@@ -55,7 +55,7 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix='orch-test-')
         environment = dict(os.environ,
-                           ORCHESTRATOR_AGENT_DIR=self.directory.name)
+                           ORCA_AGENT_DIR=self.directory.name)
         self.process = await asyncio.create_subprocess_exec(
             sys.executable, '-u', AGENT_SOURCE_PATH, 'attach',
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,

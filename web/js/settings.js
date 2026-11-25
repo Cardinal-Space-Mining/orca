@@ -1,4 +1,4 @@
-// The Settings page: the orchestrator's own settings (competition mode, the
+// The Settings page: Orca's own settings (competition mode, the
 // bandwidth budget, how it starts), what it has remembered, and where its
 // files are.
 
@@ -56,7 +56,7 @@ function StartupSettings({ state }) {
     const runningPort = Number(window.location.port) || null;
     return html`
         <section class="panel">
-            <h2>Starting the orchestrator</h2>
+            <h2>Starting Orca</h2>
             <p class="muted">Used the next time it starts, unless the command
                 line says otherwise (<span class="mono">--port</span>,${' '}
                 <span class="mono">--no-browser</span>).</p>
@@ -90,7 +90,7 @@ function Remembered({ state }) {
     return html`
         <section class="panel">
             <h2>Remembered</h2>
-            <p class="muted">What the orchestrator learned along the way.
+            <p class="muted">What Orca learned along the way.
                 Forgetting is safe: it's learned again.</p>
             <div class="section-head"><span>Internet sharing choices</span>
                 </div>
@@ -125,11 +125,11 @@ function Remembered({ state }) {
 }
 
 function Files({ state }) {
-    const info = state.orchestrator;
+    const info = state.orca;
     return html`
         <section class="panel">
             <h2>Files</h2>
-            <p class="muted">Everything the orchestrator keeps is plain JSON.
+            <p class="muted">Everything Orca keeps is plain JSON.
                 The workspace files are shared through git; the rest are this
                 laptop's own.</p>
             <table class="table">
@@ -154,7 +154,7 @@ export function SettingsView({ state }) {
         <div class="page-head">
             <div>
                 <h1>Settings</h1>
-                <p>The orchestrator's own settings. Machines are on the${' '}
+                <p>Orca's own settings. Machines are on the${' '}
                     <a class="link-button" href="#/machines/edit">Network page
                     </a>, launches under${' '}<a class="link-button"
                     href="#/launch">Launch</a>, the robot's config under${' '}

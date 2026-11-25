@@ -1,6 +1,6 @@
 '''
-Orchestrator settings that persist between runs, in
-~/.config/orchestrator/settings.json.
+Orca settings that persist between runs, in
+~/.config/orca/settings.json.
 '''
 
 from __future__ import annotations
@@ -10,10 +10,10 @@ import json
 import os
 
 
-SETTINGS_PATH = os.path.expanduser('~/.config/orchestrator/settings.json')
+SETTINGS_PATH = os.path.expanduser('~/.config/orca/settings.json')
 
 DEFAULTS = {
-    # Less orchestrator traffic on the robot's link: slower status, no live
+    # Less Orca traffic on the robot's link: slower status, no live
     # output from other machines (see docs on the Network page).
     'competition_mode': False,
     'budget': {
@@ -34,7 +34,7 @@ DEFAULTS = {
     # subnet...), offered again next time.
     'sharing': {},
     # Used when the command line doesn't say (--port, --no-browser); they
-    # apply the next time the orchestrator starts.
+    # apply the next time Orca starts.
     'startup': {
         'port': 8740,
         'open_browser': True,
@@ -43,7 +43,7 @@ DEFAULTS = {
 
 
 def validateChanges(changes: dict) -> None:
-    """Refuse values the orchestrator can't use (raises ValueError)."""
+    """Refuse values Orca can't use (raises ValueError)."""
     def number(value, name, low, high):
         if isinstance(value, bool) or not isinstance(value, (int, float)) \
                 or not low <= value <= high:

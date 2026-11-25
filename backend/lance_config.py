@@ -1,25 +1,25 @@
 '''
 The LANCE launch configuration (lance/config), read with launch-utils' own
-code so the orchestrator resolves presets exactly the way `run.sh` will.
+code so Orca resolves presets exactly the way `run.sh` will.
 
 launch-utils' common.py imports ROS (ament_index_python) and netifaces at
-module level (FINDINGS.md L4). The orchestrator only needs its JSON loading, so
+module level (FINDINGS.md L4). Orca only needs its JSON loading, so
 when those modules aren't installed it loads common.py against small stand-ins.
 
 Overrides the CLI can't express (a single value, such as the peer's IP
-address) go through an overlay file that the orchestrator writes next to
+address) go through an overlay file that Orca writes next to
 launch.json in the target's install directory:
 
     {
         "pragma:enable_preproc": true,
         "pragma:import": ["launch.json"],
         "redux": {
-            "orchestrator_robot": {"pragma:derived": "robot",
+            "orca_robot": {"pragma:derived": "robot",
                                    "client_hostname": "..."}
         }
     }
 
-and the launch gets `json_path:=<overlay> redux:=orchestrator_robot`.
+and the launch gets `json_path:=<overlay> redux:=orca_robot`.
 launch-utils merges imported files under the overlay's own keys, so the new
 preset inherits everything else from the preset that would have been chosen.
 '''
@@ -75,7 +75,7 @@ def installStandIns():
         packages = types.ModuleType('ament_index_python.packages')
 
         def getPackageShareDirectory(package):
-            raise LookupError('ROS is not available to the orchestrator: '
+            raise LookupError('ROS is not available to Orca: '
                               + package)
 
         packages.get_package_share_directory = getPackageShareDirectory
@@ -104,10 +104,10 @@ class LaunchUtils:
             raise ConfigError('launch-utils not found at ' + directory)
         installStandIns()
         self.preprocess = loadModule(
-            'orchestrator_launch_utils_preprocess',
+            'orca_launch_utils_preprocess',
             os.path.join(directory, 'preprocess.py'))
         self.common = loadModule(
-            'orchestrator_launch_utils_common',
+            'orca_launch_utils_common',
             os.path.join(directory, 'common.py'))
 
 
@@ -255,7 +255,7 @@ class LanceConfig:
                 raise ConfigError(
                     "can't set %s values: these presets don't enable the "
                     "'%s' action" % (action, action))
-            derived_name = 'orchestrator_' + tag
+            derived_name = 'orca_' + tag
             preset = {DERIVED_TAG: parent}
             preset.update(values)
             overlay[action] = {derived_name: preset}

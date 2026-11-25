@@ -11,12 +11,12 @@ import unittest
 
 from backend.config_edit import (ConfigEditor, insertMember, removeMember,
                                  replaceMember)
-from backend.core import ORCHESTRATOR_ROOT
+from backend.core import ORCA_ROOT
 from backend.lance_config import ConfigError, LanceConfig
 from backend.settings import validateChanges
 
 
-WORKSPACE = os.path.dirname(os.path.dirname(ORCHESTRATOR_ROOT))
+WORKSPACE = os.path.dirname(os.path.dirname(ORCA_ROOT))
 HAS_CONFIG = os.path.isfile(os.path.join(
     WORKSPACE, 'src', 'lance', 'config', 'launch.json'))
 
@@ -75,7 +75,7 @@ class TextEditTest(unittest.TestCase):
         self.assertEqual(json.loads(edited), {'dev': {'x': {'a': 1}}})
 
 
-@unittest.skipUnless(HAS_CONFIG, 'no lance workspace around the orchestrator')
+@unittest.skipUnless(HAS_CONFIG, 'no lance workspace around Orca')
 class EditorTest(unittest.TestCase):
 
     def setUp(self):

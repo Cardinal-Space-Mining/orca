@@ -1,10 +1,10 @@
-// The orchestrator's web interface. Preact + htm, loaded as plain ES modules
+// Orca's web interface. Preact + htm, loaded as plain ES modules
 // (no build step): edit a file under js/ and reload the page.
 
 import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { html, Icon, postJson, shortCommit } from './js/common.js';
-import { useOrchestratorState, useNow } from './js/state.js';
+import { useOrcaState, useNow } from './js/state.js';
 import { LaunchView } from './js/launch.js';
 import { ScenarioEditor } from './js/scenarioedit.js';
 import { RunsView, isRunActive } from './js/runs.js';
@@ -58,7 +58,7 @@ function useLocation() {
 }
 
 
-// Competition mode: less orchestrator traffic on the robot's link (slower
+// Competition mode: less Orca traffic on the robot's link (slower
 // status, no live output from other machines).
 function CompetitionSwitch({ state }) {
     const isOn = state.settings.competition_mode;
@@ -67,7 +67,7 @@ function CompetitionSwitch({ state }) {
         <button class="competition-switch ${isOn ? 'on' : ''}"
             title=${isOn ? 'Competition mode is on: status every 10 s, output '
                 + 'from other machines only on request. Click to turn off.'
-                : "Competition mode: keep the orchestrator's own traffic on "
+                : "Competition mode: keep Orca's own traffic on "
                 + "the robot's link small. Click to turn on."}
             onClick=${() => postJson('/api/settings',
                 { competition_mode: !isOn })}>
@@ -84,8 +84,8 @@ function TopBar({ state, isLive, tab, navigate }) {
     const numActiveRuns = state ? state.runs.filter(isRunActive).length : 0;
     return html`
         <header class="topbar">
-            <div class="brand"><img src="/static/csm-logo-dark.svg" alt="" />
-                Orchestrator</div>
+            <div class="brand"><img src="/static/orca.svg" alt="" />
+                Orca</div>
             <nav class="tabs">
                 ${TABS.map((entry) => html`
                     <button class="tab ${tab === entry.id ? 'active' : ''}"
@@ -109,7 +109,7 @@ function TopBar({ state, isLive, tab, navigate }) {
             ${state && html`<${CompetitionSwitch} state=${state} />`}
             <div class="live">
                 <span class="dot ${isLive ? 'good' : 'bad pulse'}"></span>
-                ${isLive ? 'Live' : 'Orchestrator disconnected'}
+                ${isLive ? 'Live' : 'Orca disconnected'}
             </div>
         </header>`;
 }
@@ -159,7 +159,7 @@ function Page({ state, location, navigate, now }) {
 }
 
 function App() {
-    const { state, isLive } = useOrchestratorState();
+    const { state, isLive } = useOrcaState();
     const [location, navigate] = useLocation();
     const now = useNow();
     return html`
@@ -169,7 +169,7 @@ function App() {
             ${state ? html`<${Page} state=${state} location=${location}
                 navigate=${navigate} now=${now} />`
                 : html`<div class="placeholder">
-                    Connecting to the orchestrator…</div>`}
+                    Connecting to Orca…</div>`}
         </main>
         <${TerminalDock} />`;
 }

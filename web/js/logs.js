@@ -1,4 +1,4 @@
-// The logs page: log files on each machine (orchestrator runs, the latest
+// The logs page: log files on each machine (orca runs, the latest
 // build, ROS logs, the agent, the VM's autostart log), viewed with the same
 // filters as live output.
 
@@ -8,7 +8,7 @@ import { LineView } from './console.js';
 
 
 const GROUP_ORDER = [
-    'Orchestrator runs', 'Latest build', 'ROS', 'Agent', 'VM'];
+    'Orca runs', 'Latest build', 'ROS', 'Agent', 'VM'];
 const READ_BYTES = 2 * 1024 * 1024;
 
 function logUrl(machineId, path, extra = '') {

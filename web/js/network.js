@@ -14,7 +14,7 @@ import { trafficStore } from './traffic.js';
 const SOURCE_STYLE = {
     interface: { label: 'Radio link', color: '#3987e5',
         help: 'byte counters of the robot\'s link interface: everything on '
-            + 'the link, overhead and the orchestrator included' },
+            + 'the link, overhead and Orca included' },
     net_adapter: { label: 'net_adapter', color: '#d95926',
         help: 'payload net_adapter reports, per topic, without protocol '
             + 'overhead' },
@@ -74,15 +74,15 @@ function useWidth(reference) {
 
 export function CompetitionPanel({ state }) {
     const isOn = state.settings.competition_mode;
-    const orchestratorKbps = state.machines.reduce((total, entry) =>
+    const orcaKbps = state.machines.reduce((total, entry) =>
         total + (entry.machine.is_local ? 0
-            : entry.connection.orchestrator_kbps || 0), 0);
+            : entry.connection.orca_kbps || 0), 0);
     return html`
         <section class="panel competition ${isOn ? 'on' : ''}">
             <div class="run-head">
                 <div>
                     <h2>Competition mode</h2>
-                    <p class="muted">Keeps the orchestrator's own traffic on
+                    <p class="muted">Keeps Orca's own traffic on
                         the robot's link small: status every 10 s instead of 2 s, and
                         output from other machines' processes only on request
                         (errors still show when you open a run).</p>
@@ -94,8 +94,8 @@ export function CompetitionPanel({ state }) {
                     <span></span>${isOn ? 'On' : 'Off'}
                 </label>
             </div>
-            <div class="muted">Orchestrator traffic to other machines right now:
-                <b>${' ' + formatKbps(orchestratorKbps)}</b> (payload; SSH
+            <div class="muted">Orca traffic to other machines right now:
+                <b>${' ' + formatKbps(orcaKbps)}</b> (payload; SSH
                 adds a few percent)</div>
         </section>`;
 }
@@ -490,12 +490,12 @@ export function TrafficPanel({ state }) {
         <section class="panel">
             <h2>Traffic</h2>
             <p class="muted">Every interface on every machine, from its byte
-                counters (everything, not just robot code). Orchestrator
-                column: the orchestrator's own traffic with that machine.</p>
+                counters (everything, not just robot code). Orca
+                column: Orca's own traffic with that machine.</p>
             <table class="table">
                 <thead><tr><th>Machine</th><th>Interface</th><th>Address</th>
                     <th>Down</th><th>Up</th><th>Last 3 min</th>
-                    <th>Orchestrator</th>
+                    <th>Orca</th>
                 </tr></thead>
                 <tbody>${rows.map(({ entry, iface }, index) => html`
                     <tr key=${`${entry.machine.id}/${iface.name}`}>
@@ -512,7 +512,7 @@ export function TrafficPanel({ state }) {
                             || rows[index - 1].entry !== entry
                             ? (entry.machine.is_local ? '–'
                                 : formatKbps(entry.connection
-                                    .orchestrator_kbps)) : ''}
+                                    .orca_kbps)) : ''}
                             </td>
                     </tr>`)}</tbody>
             </table>

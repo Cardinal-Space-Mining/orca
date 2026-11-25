@@ -8,7 +8,7 @@ import { NetworkMap } from './map.js';
 import { NetworkPanels, formatKbps } from './network.js';
 
 
-const VIEW_KEY = 'orchestrator.network-view';
+const VIEW_KEY = 'orca.network-view';
 
 export function preferredView() {
     return window.localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'map';

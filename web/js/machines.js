@@ -155,15 +155,15 @@ function NetworkSection({ stats }) {
         </div>`;
 }
 
-// `reference` is the code fingerprint of the orchestrator's own workspace.
+// `reference` is the code fingerprint of Orca's own workspace.
 function workspaceBadges(workspace, reference, isReference) {
     const badges = [];
     if (isReference) {
         badges.push(html`<span class="pill accent">
-            orchestrator's copy</span>`);
+            Orca's copy</span>`);
     } else if (reference && workspace.fingerprint === reference) {
         badges.push(html`<span class="pill good">
-            same code as orchestrator</span>`);
+            same code as Orca</span>`);
     } else if (reference) {
         badges.push(html`<span class="pill warn" title="Deploy from the
             Deploy page to make it match">different code</span>`);
@@ -663,12 +663,12 @@ export function MachineGrid({ state, now }) {
 export function InventoryFooter({ state }) {
     return html`
         <footer>
-            ${state.orchestrator.inventory_paths.map((entry) => html`
+            ${state.orca.inventory_paths.map((entry) => html`
                 <span>inventory <span class="mono">${entry.path}</span>
                     ${entry.exists ? '' : html`<span class="faint">${
                         ' (not found)'}</span>`}</span>`)}
             <span>agent <span class="mono">${
-                state.orchestrator.agent_hash}</span></span>
+                state.orca.agent_hash}</span></span>
         </footer>`;
 }
 

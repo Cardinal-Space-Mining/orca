@@ -26,7 +26,7 @@ class ScenarioEditTest(unittest.TestCase):
     def test_write_read_load_delete(self):
         text = json.dumps(SCENARIO, indent=4)
         path = writeScenario(self.workspace, 'my-test', text)
-        self.assertTrue(path.endswith('src/project/orchestrator/scenarios/'
+        self.assertTrue(path.endswith('src/project/orca/scenarios/'
                                       'my-test.json'))
         source = readScenarioSource(self.workspace, 'my-test')
         self.assertTrue(source['exists'])
@@ -51,7 +51,7 @@ class ScenarioEditTest(unittest.TestCase):
         with self.assertRaises(ScenarioError):
             writeScenario(self.workspace, 'broken', json.dumps(broken))
         self.assertFalse(os.path.exists(os.path.join(
-            self.workspace, 'src', 'project', 'orchestrator', 'scenarios',
+            self.workspace, 'src', 'project', 'orca', 'scenarios',
             'broken.json')))
 
 

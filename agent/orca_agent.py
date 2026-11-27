@@ -1680,6 +1680,15 @@ def autostartDaemons():
         try:
             with open(path, 'rb') as file:
                 plist = plistlib.load(file)
+        except PermissionError:
+            # Installed readable by root only (a umask of 077): go by its
+            # name, as autostart.sh names it (com.<user>.run-vm).
+            name = os.path.basename(path)
+            if 'run-vm' in name:
+                daemons.append({'label': name[:-len('.plist')],
+                                'path': path, 'arguments': [],
+                                'run_at_load': None})
+            continue
         except Exception:
             continue
         arguments = plist.get('ProgramArguments') or []
@@ -1725,14 +1734,23 @@ def repositoryStatus(path):
     }
 
 
-def overlayStatus(path):
+def overlayStatus(path, is_running=False, qemu_log=None):
     '''Who made the VM's overlay and whether it's safe to commit: one a
     force stop left behind is marked "<overlay>.unclean" by run-vm.sh, and
-    one root made (an old autostart) needs root to commit.'''
+    one root made (an old autostart) needs root to commit. An overlay of a
+    VM that QEMU says was stopped by a signal (the mac shut down with it
+    running) is unclean too, marked or not: run-vm.sh marks it on its next
+    run.'''
     try:
         info = os.stat(path)
     except OSError:
         return None
+    # run-vm.sh (and its watcher) record every exit of QEMU they see; none
+    # recorded means it never got to (a power cut, an e-stop), and
+    # "terminating on signal" means it was stopped, e.g. with the mac.
+    log = readText(qemu_log) if qemu_log is not None else None
+    signalled = not is_running and log is not None and (
+        'terminating on signal' in log or '--- QEMU exited' not in log)
     try:
         import pwd
         owner = pwd.getpwuid(info.st_uid).pw_name
@@ -1742,8 +1760,30 @@ def overlayStatus(path):
         'owner': owner,
         'is_writable': os.access(path, os.W_OK),
         'modified_s': info.st_mtime,
-        'is_unclean': os.path.exists(path + '.unclean'),
+        'is_unclean': os.path.exists(path + '.unclean') or signalled,
+        # Brought back from the saved sessions: stopping it won't commit it
+        'is_recovered': os.path.exists(path + '.recovered'),
     }
+
+
+SAVED_OVERLAY_PATTERN = re.compile(
+    r'^ubuntu-aarch64-overlay\.(saved-[0-9-]+|backup)\.qcow2$')
+
+
+def savedOverlays(root):
+    '''Sessions that didn't shut down, kept by run-vm.sh (newest first):
+    their overlays, recoverable with run-vm.sh --recover.'''
+    saved = []
+    for name in os.listdir(root) if os.path.isdir(root) else []:
+        if not SAVED_OVERLAY_PATTERN.match(name):
+            continue
+        try:
+            info = os.stat(os.path.join(root, name))
+        except OSError:
+            continue
+        saved.append({'name': name, 'bytes': info.st_size,
+                      'modified_s': info.st_mtime})
+    return sorted(saved, key=lambda entry: -entry['modified_s'])
 
 
 def vmStatus(csm_vm_path):
@@ -1765,7 +1805,9 @@ def vmStatus(csm_vm_path):
             os.path.join(root, 'ubuntu-aarch64-base.backup.qcow2')),
     }
     status['overlay'] = overlayStatus(
-        os.path.join(root, 'ubuntu-aarch64-overlay.qcow2'))
+        os.path.join(root, 'ubuntu-aarch64-overlay.qcow2'),
+        status['is_running'], os.path.join(root, 'qemu.log'))
+    status['saved_overlays'] = savedOverlays(root)
     status['autostart'] = autostartDaemons()
     status['repo'] = repositoryStatus(csm_vm_path)
     return status

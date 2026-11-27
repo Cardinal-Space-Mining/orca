@@ -82,6 +82,47 @@ class OverlayStatusTest(unittest.TestCase):
             open(overlay + '.unclean', 'w').close()
             self.assertTrue(agent.overlayStatus(overlay)['is_unclean'])
 
+    def test_vm_stopped_by_a_signal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            overlay = os.path.join(directory, 'overlay.qcow2')
+            log = os.path.join(directory, 'qemu.log')
+            open(overlay, 'w').close()
+            with open(log, 'w') as file:
+                file.write('qemu-system-aarch64: terminating on signal 15 '
+                           'from pid 474 (<unknown process>)\n')
+            self.assertTrue(agent.overlayStatus(overlay, False, log)
+                            ['is_unclean'])
+            # A power cut: QEMU's exit was never recorded.
+            with open(log, 'w') as file:
+                file.write('qemu-system-aarch64: libusb noise\n')
+            self.assertTrue(agent.overlayStatus(overlay, False, log)
+                            ['is_unclean'])
+            with open(log, 'a') as file:
+                file.write('--- QEMU exited with status 0 at 2026-11-26 ---\n')
+            self.assertFalse(agent.overlayStatus(overlay, False, log)
+                             ['is_unclean'])
+            # While it runs, an old line means nothing.
+            self.assertFalse(agent.overlayStatus(overlay, True, log)
+                             ['is_unclean'])
+
+
+class SavedOverlaysTest(unittest.TestCase):
+
+    def test_lists_saved_sessions_newest_first(self):
+        with tempfile.TemporaryDirectory() as directory:
+            names = ['ubuntu-aarch64-overlay.saved-20261126-231450.qcow2',
+                     'ubuntu-aarch64-overlay.backup.qcow2',
+                     'ubuntu-aarch64-overlay.qcow2',          # the current one
+                     'ubuntu-aarch64-base.backup.qcow2']      # the base's backup
+            for index, name in enumerate(names):
+                path = os.path.join(directory, name)
+                open(path, 'w').close()
+                os.utime(path, (1000 + index, 1000 + index))
+            self.assertEqual(
+                [entry['name'] for entry in agent.savedOverlays(directory)],
+                ['ubuntu-aarch64-overlay.backup.qcow2',
+                 'ubuntu-aarch64-overlay.saved-20261126-231450.qcow2'])
+
 
 if __name__ == '__main__':
     unittest.main()

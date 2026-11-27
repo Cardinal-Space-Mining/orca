@@ -623,6 +623,10 @@ main { container: page / inline-size; }
     white-space: nowrap; }
 
 .badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.saved-sessions { display: flex; flex-direction: column; gap: 2px; }
+.saved-session { display: flex; flex-wrap: wrap; align-items: baseline;
+    gap: 4px 10px; }
+.saved-session .link-button.danger { color: var(--bad); }
 
 .vm-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 

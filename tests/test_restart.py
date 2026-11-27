@@ -35,6 +35,7 @@ class FakeLink:
         self.calls = []
         self.phases = []
         self.vm_after_boot = False
+        self.autostart = False
 
     async def call(self, method, params=None):
         self.calls.append((method, params or {}))
@@ -52,7 +53,12 @@ class FakeLink:
         self.state['connection']['state'] = 'online'
 
     async def refreshVm(self):
-        self.state['vm'] = {'is_running': self.vm_after_boot}
+        self.refreshes = getattr(self, 'refreshes', 0) + 1
+        running = self.vm_after_boot or (
+            self.autostart and self.refreshes >= 3)
+        self.state['vm'] = {'is_running': running,
+                            'autostart': [{'label': 'x'}] if self.autostart
+                            else []}
 
     def publish(self):
         restart_state = self.state['restart']
@@ -88,7 +94,7 @@ class FakeOrca:
         return self.links[machine_id]
 
 
-FAST = dict(POLL_S=0.01, WAKE_PERIOD_S=0.01, DONE_SHOWN_S=0)
+FAST = dict(POLL_S=0.01, WAKE_PERIOD_S=0.01, DONE_SHOWN_S=0, VM_POLL_S=0.01)
 
 
 class RestartTest(unittest.IsolatedAsyncioTestCase):
@@ -113,7 +119,31 @@ class RestartTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(link.phases, [
             'Shutting down the VM', 'Restarting',
             'Waiting for it to come back', 'Starting the VM', 'Restarted'])
+        await asyncio.sleep(0.02)
         self.assertIsNone(link.state['restart'])  # cleared after a while
+
+    async def test_restart_again_while_restarted_is_shown(self):
+        link = FakeLink(vm_running=None)
+        restarter = Restarter(FakeOrca(link))
+        with mock.patch.object(restart, 'DONE_SHOWN_S', 60):
+            await restarter.restart('mac')
+            await restarter.tasks['mac']
+            self.assertTrue(link.state['restart']['done'])
+            # Not "already restarting": the last one is over.
+            self.assertEqual(await restarter.restart('mac'), {'ok': True})
+            await restarter.tasks['mac']
+
+    async def test_autostart_host_starts_its_own_vm(self):
+        link = FakeLink()
+        link.autostart = True
+        orca = FakeOrca(link)
+        restarter = Restarter(orca)
+        await restarter.restart('mac')
+        await restarter.tasks['mac']
+        # Orca shut it down but left the start to autostart.
+        self.assertEqual([action for action, _ in orca.vm.actions], ['stop'])
+        self.assertIn('Waiting for autostart to start the VM', link.phases)
+        self.assertEqual(link.phases[-1], 'Restarted')
 
     async def test_plain_machine_just_restarts(self):
         link = FakeLink(vm_running=None)

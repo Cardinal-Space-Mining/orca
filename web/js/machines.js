@@ -307,10 +307,16 @@ function overlayWarnings(vm) {
     const overlay = vm.overlay;
     if (!overlay) return [];
     const warnings = [];
-    if (overlay.is_unclean) {
-        warnings.push({ level: 'bad', text: 'from a force stop', detail:
-            "The VM was killed, not shut down: files written just before "
-            + 'may be incomplete. Discarding it is safest.' });
+    if (overlay.is_recovered) {
+        warnings.push({ level: 'warn', text: 'is a recovered session',
+            detail: 'Brought back from the saved sessions. Stopping the VM '
+                + "won't commit it: commit it only if this session should "
+                + 'become the base disk, or discard it.' });
+    } else if (overlay.is_unclean) {
+        warnings.push({ level: 'warn', text: "didn't shut down", detail:
+            'A power cut, e-stop or force stop: the guest went down without '
+            + 'shutting down, like a computer losing power. Reusing it boots '
+            + 'that session again (its files and logs are there).' });
     }
     if (!overlay.is_writable) {
         warnings.push({ level: 'warn', text: `owned by ${overlay.owner}`,
@@ -329,7 +335,9 @@ function showRun(runId) {
 function StartForm({ vm, action, onSubmit, onCancel }) {
     const hasOverlay = vm.disks.overlay_bytes != null && action === 'start';
     const isUnclean = !!(vm.overlay && vm.overlay.is_unclean);
-    const [overlay, setOverlay] = useState(isUnclean ? 'discard' : 'reuse');
+    const isRecovered = !!(vm.overlay && vm.overlay.is_recovered);
+    // Reuse keeps everything (a power cut's logs too): never preselect less.
+    const [overlay, setOverlay] = useState('reuse');
     const [wifi, setWifi] = useState(false);
     const choices = [
         ['reuse', 'Reuse it', 'continue with the changes made in the VM'],
@@ -343,9 +351,13 @@ function StartForm({ vm, action, onSubmit, onCancel }) {
                     there (${formatBytes(vm.disks.overlay_bytes)}${vm.overlay
                     ? `, last written ${formatAgo(vm.overlay.modified_s,
                         Date.now() / 1000)}` : ''}):`}</div>
-                ${isUnclean && html`<div class="error-text">It's from a force
-                    stop: the VM didn't shut down, so it may hold incomplete
-                    files. Discarding it is safest.</div>`}
+                ${isRecovered ? html`<div class="muted">It's a recovered
+                    session: reusing it boots that session, and stopping the
+                    VM won't commit it.</div>`
+                    : isUnclean && html`<div class="muted">Its VM didn't shut
+                    down (power cut, e-stop or force stop). Reusing it boots
+                    that session again, like a computer after a power cut:
+                    its files and logs are there.</div>`}
                 ${choices.map(([value, label, detail]) => html`
                     <label class="check"><input type="radio" name="overlay"
                         checked=${overlay === value}
@@ -372,9 +384,9 @@ const CONFIRMATIONS = {
         + 'backup is lost, and the current overlay is deleted.',
     discard: 'Discard the overlay? Changes made in the VM since the last '
         + 'commit are lost.',
-    commitUnclean: 'This overlay is from a force stop: the VM was killed, '
-        + 'so files written just before may be incomplete, and committing '
-        + 'writes them into the base disk for good. Commit it anyway?',
+    commitUnclean: "This overlay's VM didn't shut down (power cut, e-stop or "
+        + 'force stop), so files written just before may be incomplete, and '
+        + 'committing writes it into the base disk for good. Commit it anyway?',
 };
 
 // The action a VM run did ("stop", "restart", ...): its plan's only step.
@@ -459,6 +471,58 @@ function VmActions({ machineId, vm, vmRun }) {
         ${error && html`<div class="error-text">${error}</div>`}`;
 }
 
+function formatWhen(seconds) {
+    return new Date(seconds * 1000).toLocaleString(undefined, {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+// Sessions that didn't shut down (power cuts), kept by run-vm.sh: recover
+// one to boot it again (for its logs, say), or delete it.
+function SavedSessions({ machineId, vm, vmRun }) {
+    const [error, setError] = useState(null);
+    const saved = vm.saved_overlays || [];
+    if (saved.length === 0) return null;
+    const isBusy = vmRun && ['starting', 'running'].includes(vmRun.state);
+    async function act(action, entry) {
+        const when = `${formatWhen(entry.modified_s)}, ${formatBytes(
+            entry.bytes)}`;
+        const question = action === 'recover'
+            ? `Make the session saved ${when} the VM's overlay? `
+                + (vm.disks.overlay_bytes != null ? 'The current overlay is '
+                    + 'saved first. ' : '')
+                + 'Then Start (Reuse) boots that session, with its files and '
+                + "logs. Stopping it won't commit it."
+            : `Delete the session saved ${when}? Its files and logs are lost.`;
+        if (!window.confirm(question)) return;
+        setError(null);
+        try {
+            const run = await postJson(`/api/machines/${encodeURIComponent(
+                machineId)}/vm/${action}`, { name: entry.name });
+            showRun(run.run_id);
+        } catch (failure) {
+            setError(failure.message);
+        }
+    }
+    return html`
+        <dt>Saved sessions</dt>
+        <dd>
+            <div class="saved-sessions">${saved.map((entry) => html`
+                <div class="saved-session" title=${entry.name}>
+                    <span>${formatWhen(entry.modified_s)}</span>
+                    <span class="faint">${formatBytes(entry.bytes)}</span>
+                    <span class="spacer"></span>
+                    <button class="link-button" disabled=${vm.is_running
+                        || isBusy} title=${vm.is_running
+                        ? 'Shut the VM down first' : 'Boot this session again'}
+                        onClick=${() => act('recover', entry)}>Recover</button>
+                    <button class="link-button danger" disabled=${vm.is_running
+                        || isBusy} onClick=${() => act('forget', entry)}>
+                        Delete</button>
+                </div>`)}</div>
+            ${error && html`<div class="error-text">${error}</div>`}
+        </dd>`;
+}
+
 function VmSection({ machineId, vm, vmRun, guestLabel }) {
     if (!vm) {
         return html`<div class="section"><div class="section-head">
@@ -507,6 +571,8 @@ function VmSection({ machineId, vm, vmRun, guestLabel }) {
                         html`<span class="pill ${warning.level}"
                             title=${warning.detail}>${`overlay ${
                             warning.text}`}</span>`)}</div>`}</dd>
+                <${SavedSessions} machineId=${machineId} vm=${vm}
+                    vmRun=${vmRun} />
                 ${'repo' in vm && html`<dt>csm-vm</dt>
                     <dd><${RepoStatus} repo=${vm.repo} /></dd>`}
                 <dt>Autostart</dt>

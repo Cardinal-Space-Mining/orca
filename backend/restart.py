@@ -27,6 +27,8 @@ GONE_TIMEOUT_S = 90            # the restart command -> the machine drops off
 TERMINAL_GONE_TIMEOUT_S = 300  # someone types the sudo password first
 BACK_TIMEOUT_S = 600           # dropped off -> back online
 VM_RUN_TIMEOUT_S = 300         # a VM shutdown or start
+AUTOSTART_WAIT_S = 150         # a host with autostart starts its VM itself
+VM_POLL_S = 5.0
 POLL_S = 1.0
 WAKE_PERIOD_S = 5.0            # retry connecting this often while it boots
 DONE_SHOWN_S = 60              # "Restarted" stays on the card this long
@@ -117,19 +119,44 @@ class Restarter:
                                  BACK_TIMEOUT_S, "it hasn't come back yet "
                                  '(Orca keeps trying to connect)', wake=True)
             if had_vm:
-                self.show(link, 'Starting the VM')
-                await link.refreshVm()
-                if not self.isVmRunning(link):
-                    await self.vmAction(link, 'start', {'overlay': 'reuse'},
-                                        "the VM didn't start again")
+                await self.restartVm(link)
             self.show(link, 'Restarted', done=True)
-            await asyncio.sleep(DONE_SHOWN_S)
-            if (link.state.get('restart') or {}).get('done'):
-                link.state['restart'] = None
-                link.publish()
+            # The task ends here (so another restart can start right away);
+            # the "Restarted" note goes a minute later, unless replaced.
+            shown = link.state['restart']
+            asyncio.get_running_loop().call_later(
+                DONE_SHOWN_S, self.clearDone, link, shown)
         except (PlanError, AgentError, ConnectionError,
                 asyncio.TimeoutError) as error:
             self.show(link, 'Restart failed', error=str(error))
+
+    async def restartVm(self, link):
+        '''Start the VM again, unless the host's autostart does: then wait
+        for it rather than race it (run-vm.sh refuses a second VM anyway).'''
+        await link.refreshVm()
+        if self.isVmRunning(link):
+            return
+        if (link.state['vm'] or {}).get('autostart'):
+            self.show(link, 'Waiting for autostart to start the VM')
+            start_s = time.monotonic()
+            while time.monotonic() - start_s < AUTOSTART_WAIT_S:
+                await asyncio.sleep(VM_POLL_S)
+                await link.refreshVm()
+                if self.isVmRunning(link):
+                    return
+        self.show(link, 'Starting the VM')
+        try:
+            await self.vmAction(link, 'start', {'overlay': 'reuse'},
+                                "the VM didn't start again")
+        except PlanError:
+            await link.refreshVm()
+            if not self.isVmRunning(link):  # not started by someone else
+                raise
+
+    def clearDone(self, link, shown: dict):
+        if link.state.get('restart') is shown:
+            link.state['restart'] = None
+            link.publish()
 
     def isOnline(self, link) -> bool:
         return link.state['connection']['state'] == 'online'

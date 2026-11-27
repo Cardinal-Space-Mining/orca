@@ -3,6 +3,7 @@ machine, and the state of the VM's overlay.'''
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -21,6 +22,22 @@ def git(directory, *args):
                    check=True, capture_output=True)
 
 
+class RunVmLibrariesTest(unittest.TestCase):
+
+    def test_missing_libraries(self):
+        with tempfile.TemporaryDirectory() as folder:
+            os.mkdir(os.path.join(folder, 'lib'))
+            open(os.path.join(folder, 'lib', 'common.sh'), 'w').close()
+            text = ('source "$SCRIPTPATH/lib/common.sh"\n'
+                    'source "$SCRIPTPATH/lib/modes.sh"\n'
+                    '# source "$SCRIPTPATH/lib/old.sh"\n')
+            self.assertEqual(agent.missingRunVmLibraries(
+                os.path.join(folder, 'run-vm.sh'), text), ['lib/modes.sh'])
+            self.assertEqual(agent.missingRunVmLibraries(
+                os.path.join(folder, 'run-vm.sh'), 'echo one file'), [])
+
+
+@unittest.skipUnless(shutil.which('git'), 'needs git')
 class RepositoryStatusTest(unittest.TestCase):
 
     def setUp(self):

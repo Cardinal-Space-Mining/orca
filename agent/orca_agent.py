@@ -769,6 +769,18 @@ VM_COMMANDS = ('/opt/homebrew/bin/qemu-system-aarch64',
 VM_SUDO_COMMANDS = VM_COMMANDS + ('/bin/kill', '/opt/homebrew/bin/qemu-img')
 
 
+# The files a split run-vm.sh sources, as it names them:
+# source "$SCRIPTPATH/lib/common.sh"
+RUN_VM_LIBRARY = re.compile(r'^\s*source "\$SCRIPTPATH/(lib/[\w.-]+\.sh)"',
+                            re.M)
+
+
+def missingRunVmLibraries(script: str, text: str) -> list:
+    folder = os.path.dirname(script)
+    return [name for name in RUN_VM_LIBRARY.findall(text)
+            if not os.path.isfile(os.path.join(folder, name))]
+
+
 def rebootCommand():
     '''The command that restarts this machine (run as root).'''
     if IS_MACOS:
@@ -903,8 +915,12 @@ def setupChecks(options):
             else:
                 current = '--overlay' in text and 'SERIAL_SOCKET' in text
                 safe_stop = 'STOP_TIMEOUT_S' in text
+                missing = missingRunVmLibraries(script, text)
                 check('csm-vm', 'csm-vm run-vm.sh',
-                      'ok' if current and safe_stop else 'todo',
+                      'ok' if current and safe_stop and not missing
+                      else 'todo',
+                      'run-vm.sh is missing %s, so it can\'t run.'
+                      % ', '.join(missing) if missing else
                       'Supports --overlay, the serial console and a stop '
                       'timeout.' if current and safe_stop
                       else 'An older run-vm.sh: Shut down can wait forever '
@@ -2180,6 +2196,8 @@ class Terminal:
         self.terminal_id = terminal_id
         self.argv = params['argv']
         self.cwd = os.path.expanduser(params.get('cwd') or '~')
+        if not os.path.isdir(self.cwd):  # a folder not made yet: start home
+            self.cwd = os.path.expanduser('~')
         self.columns = int(params.get('cols', 100))
         self.rows = int(params.get('rows', 30))
         self.extra_env = params.get('env') or {}

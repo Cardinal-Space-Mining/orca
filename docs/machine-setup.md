@@ -101,7 +101,9 @@ lance ALL=(root) NOPASSWD: /sbin/shutdown -r now
 - csm-vm at the path in `machines.json` (`vm.csm_vm_path`, normally
   `~/code/csm-vm`), **with the run-vm.sh that has `--overlay` and the serial
   console** (`./run-vm.sh --help` lists `--overlay`). Older copies stop at the
-  "uncommitted overlay" question when started without a terminal.
+  "uncommitted overlay" question when started without a terminal. A newer
+  run-vm.sh needs its `lib/` folder next to it; the checklist's "Update
+  run-vm.sh" fix copies both from this laptop's checkout.
 - **Passwordless sudo for QEMU, socat, kill and qemu-img**, which run-vm.sh
   runs as root (vmnet networking and USB passthrough need it, the monitor and
   serial sockets are root's, Force stop kills root's QEMU, and an overlay a

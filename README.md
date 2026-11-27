@@ -352,7 +352,8 @@ offered once an identical copy is on your laptop.
 
 - **Terminal** on any machine card opens a shell there, in a dock at the
   bottom of every page (several at once, in tabs). It replaces `ssh` for
-  anything the pages don't cover.
+  anything the pages don't cover. It starts in the machine's workspace, or
+  on a VM host in its csm-vm checkout.
 - **Serial console** on a running VM connects to its serial port, so you can
   log in and fix networking while the VM's own network is down (what
   `run-vm.sh --term` was for, without stopping the VM). Every key goes to the

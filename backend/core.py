@@ -396,7 +396,9 @@ class Orca:
             params['argv'] = self.discovery.keyCommand(target)
             title = 'Install SSH key · %s' % target.get('address')
         else:
-            params['cwd'] = link.machine.workspace or '~'
+            # A VM host starts in its csm-vm checkout, where run-vm.sh is.
+            params['cwd'] = ((link.machine.vm and link.machine.vm.csm_vm_path)
+                             or link.machine.workspace or '~')
             title = 'Shell · %s' % link.machine.label
         opened = await link.call('terminal.open', params)
         link.terminals.add(opened['terminal_id'])

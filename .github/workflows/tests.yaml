@@ -39,7 +39,7 @@ jobs:
             -w /workspace/src/orca \
             ubuntu:${{ matrix.ubuntu }} \
             /bin/bash -c "apt-get update -qq && \
-              apt-get install -y -qq python3 iproute2 > /dev/null && \
+              apt-get install -y -qq python3 iproute2 git > /dev/null && \
               python3 --version && \
               python3 -m unittest discover -s tests -t . -v"
 

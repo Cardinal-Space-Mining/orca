@@ -19,6 +19,10 @@ from .runs import PlanError
 SCRIPT_REMOTE_PATH = '~/.orca/setup-%s.sh'
 SAFE_PATH = re.compile(r'^~?[A-Za-z0-9_./-]*$')
 CSM_VM_NEW_NAME = 'run-vm.sh.orca-new'
+CSM_VM_NEW_LIBRARY = 'run-vm.lib-%s.orca-new'  # lib/<name>, uploaded
+# The files run-vm.sh sources: source "$SCRIPTPATH/lib/common.sh"
+RUN_VM_LIBRARY = re.compile(r'^\s*source "\$SCRIPTPATH/(lib/[\w.-]+\.sh)"',
+                            re.M)
 
 SCRIPT_START = '''#!/bin/bash
 # Written by Orca: %s
@@ -168,25 +172,46 @@ class Setup:
         return ['/bin/bash', written['path']]
 
     async def pushRunVm(self, link) -> tuple:
-        '''Copy this laptop's run-vm.sh next to the machine's and swap it in
-        (the old one is kept as run-vm.sh.bak).'''
+        '''Copy this laptop's run-vm.sh, and the lib/ files it sources, next
+        to the machine's and swap them in (the old ones are kept as
+        run-vm.sh.bak and lib.bak).'''
         source = localRunVm()
         if source is None or not link.machine.vm:
             raise PlanError('no up-to-date csm-vm checkout on this laptop')
         folder = link.machine.vm.csm_vm_path
         if not SAFE_PATH.match(folder):
             raise PlanError('unusual csm-vm path: ' + folder)
+        libraries = sorted(glob.glob(os.path.join(
+            os.path.dirname(source), 'lib', '*.sh')))
         with open(source) as file:
-            await link.call('file.write', {
-                'path': folder.rstrip('/') + '/' + CSM_VM_NEW_NAME,
-                'content': file.read()})
+            needed = set(RUN_VM_LIBRARY.findall(file.read()))
+        missing = needed - {'lib/' + os.path.basename(path)
+                            for path in libraries}
+        if missing:
+            raise PlanError('the csm-vm checkout on this laptop is missing '
+                            + ', '.join(sorted(missing)))
+        uploads = [(source, CSM_VM_NEW_NAME)] + [
+            (path, CSM_VM_NEW_LIBRARY % os.path.basename(path))
+            for path in libraries]
+        for path, name in uploads:
+            with open(path) as file:
+                await link.call('file.write', {
+                    'path': folder.rstrip('/') + '/' + name,
+                    'content': file.read()})
         shell_folder = '"$HOME"/' + folder[2:] if folder.startswith('~/') \
             else '"%s"' % folder
-        body = ('cd %s\n'
-                'cp -p run-vm.sh run-vm.sh.bak\n'
-                'mv %s run-vm.sh\n'
-                'chmod +x run-vm.sh\n'
-                './run-vm.sh --help | grep -e --overlay\n'
-                % (shell_folder, CSM_VM_NEW_NAME))
+        body = 'cd %s\n' % shell_folder
+        if libraries:
+            body += ('rm -rf lib.bak\n'
+                     '[ -d lib ] && cp -Rp lib lib.bak\n'
+                     'mkdir -p lib\n')
+            for path in libraries:
+                name = os.path.basename(path)
+                body += 'mv %s lib/%s\n' % (CSM_VM_NEW_LIBRARY % name, name)
+        body += ('cp -p run-vm.sh run-vm.sh.bak\n'
+                 'mv %s run-vm.sh\n'
+                 'chmod +x run-vm.sh\n'
+                 './run-vm.sh --help | grep -e --overlay\n'
+                 % CSM_VM_NEW_NAME)
         return ('Update run-vm.sh from %s' % source.replace(
             os.path.expanduser('~'), '~'), body)

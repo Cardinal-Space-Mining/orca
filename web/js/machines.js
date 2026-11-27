@@ -29,6 +29,57 @@ const KIND_LABELS = {
     wifi: 'WIFI', ethernet: 'ETH', bridge: 'BR', can: 'CAN', virtual: 'VIRT',
 };
 
+// Restart a machine (restart.py): a VM host shuts its VM down first and
+// starts it again after. If sudo wants a password, a terminal runs it.
+async function restartMachine(entry, machinesById) {
+    const { machine } = entry;
+    const guest = machine.vm && machine.vm.guest
+        && machinesById[machine.vm.guest];
+    const hasVm = !!(entry.vm && entry.vm.is_running);
+    const lines = [`Restart ${machine.label}?`];
+    if (hasVm) {
+        lines.push(`Its VM${guest ? ` (${guest.machine.label})` : ''} is shut `
+            + 'down first (its overlay is committed) and started again once '
+            + `${machine.label} is back.`);
+    }
+    if (machine.host) {
+        lines.push('This restarts its OS only: the VM keeps its USB devices. '
+            + 'To reset those, restart the host.');
+    }
+    lines.push('Anything running on it stops, including what Orca launched.');
+    if (!window.confirm(lines.join('\n\n'))) return;
+    try {
+        const result = await postJson(`/api/machines/${encodeURIComponent(
+            machine.id)}/restart`);
+        if (result.needs_password && window.confirm(`sudo asks for a password `
+            + `to restart ${machine.label}. Restart it from a terminal, where `
+            + 'you can type it? (The "Restart without a password" setup item '
+            + 'makes this one click.)')) {
+            openTerminal(machine.id, 'restart');
+        }
+    } catch (failure) {
+        window.alert(failure.message);
+    }
+}
+
+// A restart in progress (or how the last one ended), for the card and map.
+export function RestartStatus({ restart, compact = false }) {
+    if (!restart) return null;
+    const level = restart.error ? 'bad' : restart.done ? 'good' : 'warn';
+    if (compact) {
+        return html`<span class="pill ${level}" title=${restart.error
+            || restart.phase}>${restart.error ? 'restart failed'
+            : restart.done ? 'restarted' : 'restarting…'}</span>`;
+    }
+    return html`<div class="notice-line ${restart.error ? 'bad'
+        : restart.done ? '' : 'warn'}">
+        <span class="dot ${level} ${restart.done || restart.error ? ''
+            : 'pulse'}"></span>
+        <span><b>${restart.phase}</b>${restart.error
+            ? `: ${restart.error}` : restart.done ? '' : '…'}</span>
+    </div>`;
+}
+
 function postReconnect(machineId) {
     postJson(`/api/machines/${encodeURIComponent(machineId)}/reconnect`)
         .catch(() => {});  // the card shows the link's state anyway
@@ -214,6 +265,61 @@ function WorkspaceSection({ path, workspace, reference, isReference, now }) {
 
 // --- VM controls -------------------------------------------------------------
 
+// Edits in a host's csm-vm checkout that exist only on that machine: easy to
+// lose track of. Empty when it's in sync (or not a git checkout).
+export function csmVmProblems(repo) {
+    if (!repo) return [];
+    const problems = [];
+    if (repo.num_changes > 0) {
+        problems.push(`${repo.num_changes} uncommitted`);
+    }
+    const unpushed = Math.max(repo.num_ahead || 0, repo.num_unpushed || 0);
+    if (unpushed > 0) problems.push(`${unpushed} unpushed`);
+    return problems;
+}
+
+function RepoStatus({ repo }) {
+    if (!repo) return html`<span class="faint">not a git checkout</span>`;
+    const problems = csmVmProblems(repo);
+    const offBranch = (repo.num_unpushed || 0) > (repo.num_ahead || 0);
+    const title = [
+        repo.changed_files.length ? `changed: ${repo.changed_files.join(', ')}`
+            + (repo.num_changes > repo.changed_files.length ? ', …' : '')
+            : '',
+        repo.upstream ? `tracking ${repo.upstream}`
+            : 'this branch has no upstream (never pushed)',
+        offBranch ? 'other local branches have commits no remote has' : '',
+        repo.num_behind ? `${repo.num_behind} behind (as of the last fetch)`
+            : '',
+    ].filter(Boolean).join('\n');
+    return html`<div class="badges" title=${title}>
+        <span class="mono">${repo.branch}</span>
+        ${problems.length ? problems.map((problem) => html`
+            <span class="pill warn">${problem}</span>`)
+            : html`<span class="pill good">in sync</span>`}
+        ${repo.num_behind > 0 && html`<span class="pill">${
+            `${repo.num_behind} behind`}</span>`}
+    </div>`;
+}
+
+// What to know about a leftover overlay before reusing or committing it.
+function overlayWarnings(vm) {
+    const overlay = vm.overlay;
+    if (!overlay) return [];
+    const warnings = [];
+    if (overlay.is_unclean) {
+        warnings.push({ level: 'bad', text: 'from a force stop', detail:
+            "The VM was killed, not shut down: files written just before "
+            + 'may be incomplete. Discarding it is safest.' });
+    }
+    if (!overlay.is_writable) {
+        warnings.push({ level: 'warn', text: `owned by ${overlay.owner}`,
+            detail: 'Made by a start that ran as root: committing it '
+                + 'needs sudo (run-vm.sh does that itself).' });
+    }
+    return warnings;
+}
+
 function showRun(runId) {
     window.location.hash = `#/runs/${runId}`;
 }
@@ -222,7 +328,8 @@ function showRun(runId) {
 // behind (it holds changes made in the VM since that session started).
 function StartForm({ vm, action, onSubmit, onCancel }) {
     const hasOverlay = vm.disks.overlay_bytes != null && action === 'start';
-    const [overlay, setOverlay] = useState('reuse');
+    const isUnclean = !!(vm.overlay && vm.overlay.is_unclean);
+    const [overlay, setOverlay] = useState(isUnclean ? 'discard' : 'reuse');
     const [wifi, setWifi] = useState(false);
     const choices = [
         ['reuse', 'Reuse it', 'continue with the changes made in the VM'],
@@ -233,7 +340,12 @@ function StartForm({ vm, action, onSubmit, onCancel }) {
         <div class="vm-form">
             ${hasOverlay && html`
                 <div class="muted">${`An overlay from a previous session is
-                    there (${formatBytes(vm.disks.overlay_bytes)}):`}</div>
+                    there (${formatBytes(vm.disks.overlay_bytes)}${vm.overlay
+                    ? `, last written ${formatAgo(vm.overlay.modified_s,
+                        Date.now() / 1000)}` : ''}):`}</div>
+                ${isUnclean && html`<div class="error-text">It's from a force
+                    stop: the VM didn't shut down, so it may hold incomplete
+                    files. Discarding it is safest.</div>`}
                 ${choices.map(([value, label, detail]) => html`
                     <label class="check"><input type="radio" name="overlay"
                         checked=${overlay === value}
@@ -260,7 +372,16 @@ const CONFIRMATIONS = {
         + 'backup is lost, and the current overlay is deleted.',
     discard: 'Discard the overlay? Changes made in the VM since the last '
         + 'commit are lost.',
+    commitUnclean: 'This overlay is from a force stop: the VM was killed, '
+        + 'so files written just before may be incomplete, and committing '
+        + 'writes them into the base disk for good. Commit it anyway?',
 };
+
+// The action a VM run did ("stop", "restart", ...): its plan's only step.
+function runAction(run) {
+    return run && run.plan && run.plan.processes
+        && run.plan.processes[0] && run.plan.processes[0].key;
+}
 
 function VmActions({ machineId, vm, vmRun }) {
     const [form, setForm] = useState(null);  // 'start' | 'restart' | null
@@ -273,6 +394,11 @@ function VmActions({ machineId, vm, vmRun }) {
         }
         if (options.overlay === 'discard'
                 && !window.confirm(CONFIRMATIONS.discard)) {
+            return;
+        }
+        if ((action === 'commit' || options.overlay === 'commit')
+                && vm.overlay && vm.overlay.is_unclean
+                && !window.confirm(CONFIRMATIONS.commitUnclean)) {
             return;
         }
         setForm(null);
@@ -291,7 +417,18 @@ function VmActions({ machineId, vm, vmRun }) {
         class="button small ${extra}" disabled=${isBusy}
         onClick=${onClick}>${label}</button>`;
     const hasSerial = vm.is_running && vm.serial_socket;
+    // A shutdown that gave up (run-vm.sh's timeout) leaves the VM running.
+    const stopFailed = vm.is_running && vmRun && vmRun.state === 'failed'
+        && ['stop', 'restart'].includes(runAction(vmRun));
     return html`
+        ${stopFailed && html`<div class="notice-line warn">
+            <span>The VM didn't power off: the guest may be hung or ignoring
+                its power button.</span>
+            <button class="link-button" onClick=${() => showRun(
+                vmRun.run_id)}>See why</button>
+            <button class="button small danger" disabled=${isBusy}
+                onClick=${() => act('kill')}>Force stop</button>
+        </div>`}
         <div class="vm-actions">
             ${vm.is_running ? html`
                 <button class="button small primary" disabled=${!hasSerial}
@@ -364,7 +501,14 @@ function VmSection({ machineId, vm, vmRun, guestLabel }) {
                     vm.disks.backup_bytes != null
                         ? `backup ${formatBytes(vm.disks.backup_bytes)}`
                         : 'no backup',
-                ].join(' · ')}</dd>
+                ].join(' · ')}
+                    ${overlayWarnings(vm).length > 0 && html`<div
+                        class="badges">${overlayWarnings(vm).map((warning) =>
+                        html`<span class="pill ${warning.level}"
+                            title=${warning.detail}>${`overlay ${
+                            warning.text}`}</span>`)}</div>`}</dd>
+                ${'repo' in vm && html`<dt>csm-vm</dt>
+                    <dd><${RepoStatus} repo=${vm.repo} /></dd>`}
                 <dt>Autostart</dt>
                 <dd>${autostart.length
                     ? autostart.map((entry) => html`<span class="mono">${
@@ -537,7 +681,14 @@ export function MachineCard({ entry, machinesById, reference, now }) {
                 ${isOnline && html`<button class="icon-button"
                     title="Open a shell on this machine"
                     onClick=${() => openTerminal(machine.id)}>Terminal</button>`}
+                ${isOnline && !machine.is_local && html`<button
+                    class="icon-button" title="Restart this machine"
+                    disabled=${!!(entry.restart && !entry.restart.done
+                        && !entry.restart.error)}
+                    onClick=${() => restartMachine(entry, machinesById)}>
+                    Restart</button>`}
             </header>
+            <${RestartStatus} restart=${entry.restart} />
             <${ConnectionRow} connection=${connection} info=${info} />
             <${OfflineNotice} machineId=${machine.id} connection=${connection}
                 now=${now} />

@@ -1755,6 +1755,9 @@ tr.clickable:hover td { background: var(--surface-hover); }
 .notice-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
     margin: 4px 0 10px; padding: 7px 12px; border-radius: var(--radius-small);
     background: var(--accent-soft); font-size: 12.5px; }
+.notice-line.warn { background: var(--warn-soft); color: var(--warn-text); }
+.notice-line.bad { background: var(--bad-soft); color: var(--bad-text); }
+.card-head + .notice-line { margin: 10px 0 0; }
 
 /* Scenario editor. */
 .scenario-editor { display: grid;

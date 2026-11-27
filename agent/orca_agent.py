@@ -764,6 +764,35 @@ OLD_EEE_UDEV_RULE = '/etc/udev/rules.d/70-orchestrator-eee.rules'
 CAN_COMMANDS = ('/usr/bin/slcand', 'link set can0 up')
 VM_COMMANDS = ('/opt/homebrew/bin/qemu-system-aarch64',
                '/opt/homebrew/bin/socat')
+# What run-vm.sh runs as root: QEMU, its monitor (socat), force stop (kill)
+# and committing an overlay root made (qemu-img).
+VM_SUDO_COMMANDS = VM_COMMANDS + ('/bin/kill', '/opt/homebrew/bin/qemu-img')
+
+
+def rebootCommand():
+    '''The command that restarts this machine (run as root).'''
+    if IS_MACOS:
+        return ['/sbin/shutdown', '-r', 'now']
+    return [shutil.which('systemctl') or '/usr/bin/systemctl', 'reboot']
+
+
+def rebootMachine(check_only=False):
+    '''Restart this machine now, without a password. {"needs_password":
+    true, "command"} when sudo would ask for one (Orca then runs the
+    command in a terminal instead); check_only just says which.'''
+    argv = rebootCommand()
+    is_root = os.geteuid() == 0
+    if not is_root and not sudoAllows(argv):
+        return {'ok': False, 'needs_password': True,
+                'command': ['sudo'] + argv}
+    if check_only:
+        return {'ok': True}
+    # Detached, and a moment from now, so this answer reaches Orca first.
+    subprocess.Popen(['/bin/sh', '-c', 'sleep 1; exec "$@"', 'reboot']
+                     + (argv if is_root else ['sudo', '-n'] + argv),
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+    return {'ok': True}
 
 
 def sudoAllows(argv):
@@ -802,6 +831,13 @@ def setupChecks(options):
                        'detail': detail})
 
     user = getpass.getuser()
+    if not options.get('is_local'):
+        allowed = os.geteuid() == 0 or sudoAllows(rebootCommand())
+        check('reboot-sudo', 'Restart without a password',
+              'ok' if allowed else 'optional',
+              'Restart on its card restarts it in one click.' if allowed
+              else 'Restart on its card opens a terminal to type the '
+              'sudo password in.')
     if not IS_MACOS:
         if not options.get('is_local'):
             linger = (runCommand(['loginctl', 'show-user', user, '-p',
@@ -866,22 +902,27 @@ def setupChecks(options):
                       'No run-vm.sh in %s.' % vm_path)
             else:
                 current = '--overlay' in text and 'SERIAL_SOCKET' in text
+                safe_stop = 'STOP_TIMEOUT_S' in text
                 check('csm-vm', 'csm-vm run-vm.sh',
-                      'ok' if current else 'todo',
-                      'Supports --overlay and the serial console.' if current
-                      else 'An older run-vm.sh: starting the VM from the '
-                      'orca can stop at a question, and there is no '
-                      'serial console.')
+                      'ok' if current and safe_stop else 'todo',
+                      'Supports --overlay, the serial console and a stop '
+                      'timeout.' if current and safe_stop
+                      else 'An older run-vm.sh: Shut down can wait forever '
+                      'for a hung VM, and Force stop can\'t kill it.'
+                      if current else 'An older run-vm.sh: starting the VM '
+                      'from the orca can stop at a question, and there is '
+                      'no serial console.')
             tools = [path for path in VM_COMMANDS if not os.path.exists(path)]
             check('vm-tools', 'QEMU and socat', 'ok' if not tools else 'todo',
                   'Installed with Homebrew.' if not tools else
                   'Missing %s (brew install qemu socat).' % ', '.join(tools))
-            allowed = all(sudoAllows([path]) for path in VM_COMMANDS)
+            allowed = all(sudoAllows([path]) for path in VM_SUDO_COMMANDS)
             check('vm-sudo', 'VM control without a password',
                   'ok' if allowed else 'todo',
-                  'run-vm.sh can start and stop the VM.' if allowed else
-                  'sudo asks for a password for QEMU / socat, so the VM '
-                  'can\'t be started from Orca.')
+                  'run-vm.sh can start, stop and force-stop the VM.'
+                  if allowed else 'sudo asks for a password for QEMU, '
+                  'socat, kill or qemu-img, so starting, stopping or '
+                  'force-stopping the VM from Orca fails.')
     if options.get('workspace'):
         distros = installedRosDistros()
         check('ros', 'ROS 2', 'ok' if distros else 'todo',
@@ -1649,6 +1690,62 @@ def autostartDaemons():
     return daemons
 
 
+def repositoryStatus(path):
+    '''Edits in a git checkout that exist only on this machine (the csm-vm
+    scripts): uncommitted files, commits the current branch hasn't pushed,
+    and commits on any local branch that no remote branch has. Compared
+    with the remotes as of the last fetch: nothing here goes to the
+    network. None when path isn't a git checkout.'''
+    root = os.path.expanduser(path)
+    if git(root, 'rev-parse', 'HEAD') is None:
+        return None
+    # Not git(): stripping would eat the first line's status column.
+    porcelain = [line for line in (runCommand(
+        ['git', '-C', root, 'status', '--porcelain']) or '').splitlines()
+        if line]
+
+    def count(*args):
+        output = git(root, 'rev-list', '--count', *args)
+        return int(output) if output and output.isdigit() else None
+
+    upstream = git(root, 'rev-parse', '--abbrev-ref',
+                   '--symbolic-full-name', '@{u}')
+    return {
+        'branch': git(root, 'rev-parse', '--abbrev-ref', 'HEAD'),
+        'upstream': upstream,
+        'num_changes': len(porcelain),
+        'changed_files': [line[3:] for line in porcelain[:8]],
+        # The current branch against its upstream; without one, its commits
+        # that no remote has.
+        'num_ahead': count('@{u}..HEAD') if upstream
+        else count('HEAD', '--not', '--remotes'),
+        'num_behind': count('HEAD..@{u}') if upstream else None,
+        # Every local branch: work left on a branch that isn't checked out.
+        'num_unpushed': count('--branches', '--not', '--remotes'),
+    }
+
+
+def overlayStatus(path):
+    '''Who made the VM's overlay and whether it's safe to commit: one a
+    force stop left behind is marked "<overlay>.unclean" by run-vm.sh, and
+    one root made (an old autostart) needs root to commit.'''
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    try:
+        import pwd
+        owner = pwd.getpwuid(info.st_uid).pw_name
+    except (ImportError, KeyError):
+        owner = str(info.st_uid)
+    return {
+        'owner': owner,
+        'is_writable': os.access(path, os.W_OK),
+        'modified_s': info.st_mtime,
+        'is_unclean': os.path.exists(path + '.unclean'),
+    }
+
+
 def vmStatus(csm_vm_path):
     root = os.path.expanduser(csm_vm_path)
     status = {'csm_vm_path': csm_vm_path,
@@ -1667,7 +1764,10 @@ def vmStatus(csm_vm_path):
         'backup_bytes': fileSize(
             os.path.join(root, 'ubuntu-aarch64-base.backup.qcow2')),
     }
+    status['overlay'] = overlayStatus(
+        os.path.join(root, 'ubuntu-aarch64-overlay.qcow2'))
     status['autostart'] = autostartDaemons()
+    status['repo'] = repositoryStatus(csm_vm_path)
     return status
 
 
@@ -2285,6 +2385,7 @@ class Daemon:
             'setup.check': self.methodSetupCheck,
             'share.up': self.methodShareUp,
             'share.down': self.methodShareDown,
+            'machine.reboot': self.methodMachineReboot,
             'bags.list': self.methodBagsList,
             'bags.delete': self.methodBagsDelete,
             'logs.list': self.methodLogsList,
@@ -2450,6 +2551,10 @@ class Daemon:
 
     async def methodShareDown(self, session, params):
         return await self.inThread(shareDown, params)
+
+    async def methodMachineReboot(self, session, params):
+        return await self.inThread(rebootMachine,
+                                   bool(params.get('check_only')))
 
     async def methodNetNeighbours(self, session, params):
         '''{ip: mac} of hosts this machine has talked to recently.'''

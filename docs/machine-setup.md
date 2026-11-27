@@ -83,27 +83,46 @@ lance ALL=(root) NOPASSWD: /usr/bin/slcand, /usr/bin/ip link *, /usr/sbin/ip lin
 
 Check with `sudo -n ip link show` (no password prompt) on the robot computer.
 
+## Restarting from Orca (optional)
+
+A machine's card has **Restart**. Without a password for the restart
+command it opens a terminal to type the sudo password in; with this rule
+it's one click (the setup checklist's *Restart without a password* → Fix
+installs it):
+```
+# Linux (/etc/sudoers.d/orca-reboot)
+lance ALL=(root) NOPASSWD: /usr/bin/systemctl reboot
+# macOS (/etc/sudoers.d/orca-reboot)
+lance ALL=(root) NOPASSWD: /sbin/shutdown -r now
+```
+
 ## macOS VM hosts (robot mac)
 
 - csm-vm at the path in `machines.json` (`vm.csm_vm_path`, normally
   `~/code/csm-vm`), **with the run-vm.sh that has `--overlay` and the serial
   console** (`./run-vm.sh --help` lists `--overlay`). Older copies stop at the
   "uncommitted overlay" question when started without a terminal.
-- **Passwordless sudo for QEMU and socat**, which run-vm.sh runs as root
-  (vmnet networking and USB passthrough need it, and the monitor and serial
-  sockets are root's):
+- **Passwordless sudo for QEMU, socat, kill and qemu-img**, which run-vm.sh
+  runs as root (vmnet networking and USB passthrough need it, the monitor and
+  serial sockets are root's, Force stop kills root's QEMU, and an overlay a
+  root-run start made needs root to commit):
   ```bash
   sudo visudo -f /etc/sudoers.d/csm-vm
   ```
   ```
   # csm-vm: start/stop the VM and reach its sockets without a terminal
-  lance ALL=(root) NOPASSWD: /opt/homebrew/bin/qemu-system-aarch64, /opt/homebrew/bin/socat
+  lance ALL=(root) NOPASSWD: /opt/homebrew/bin/qemu-system-aarch64, /opt/homebrew/bin/socat, /bin/kill, /opt/homebrew/bin/qemu-img
   ```
   Passwordless QEMU as root is close to passwordless root (QEMU can open any
   file as a disk), which is acceptable on a dedicated robot computer but worth
   knowing.
 - Then restart the VM once from Orca (the mac's card on the Network page →
   VM → Restart): VMs started by an older run-vm.sh have no serial console.
+- No other job should start the VM: an old LaunchDaemon that runs
+  `run-vm.sh --startd` at boot (as root) leaves a root-owned overlay behind
+  each time it fails, which Orca then shows as an unexpected overlay. Check
+  with `grep -l run-vm /Library/LaunchDaemons/*.plist`; csm-vm's
+  `autostart.sh --install` is the supported way to start it at boot.
 - Prefer the mac's IP addresses over its `<name>.local` name in the
   inventory: with Wi-Fi and Ethernet on the same network, the `.local` name
   can resolve to the Wi-Fi address only, and SSH over a mac's Wi-Fi has

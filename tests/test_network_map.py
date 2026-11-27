@@ -139,6 +139,14 @@ class NetworkMapTest(unittest.TestCase):
         # A device on a vanished network isn't shown.
         self.assertEqual(model['devices'], [])
 
+    def test_broadcast_isnt_a_device(self):
+        book = DeviceBook()
+        book.see('ff:ff:ff:ff:ff:ff', '192.168.18.255', 'neighbour')
+        book.see('dd:07', '10.11.11.255', 'neighbour')  # odd MAC, still broadcast
+        self.assertEqual(len(book.devices), 1)
+        model = buildNetworkModel(LINKS, book.snapshot(), {})
+        self.assertEqual(model['devices'], [])
+
     def test_machine_kind(self):
         self.assertEqual(machineKind({'id': 'x', 'icon': 'laptop'}, {}),
                          'laptop')

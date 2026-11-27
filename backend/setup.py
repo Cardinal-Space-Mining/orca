@@ -75,11 +75,24 @@ FIXES = {
         'Let run-vm.sh start the VM without a password',
         'RULE="$(mktemp)"\n'
         'echo "$(id -un) ALL=(root) NOPASSWD: '
-        '/opt/homebrew/bin/qemu-system-aarch64, /opt/homebrew/bin/socat" '
-        '> "$RULE"\n'
+        '/opt/homebrew/bin/qemu-system-aarch64, /opt/homebrew/bin/socat, '
+        '/bin/kill, /opt/homebrew/bin/qemu-img" > "$RULE"\n'
         'sudo visudo -cf "$RULE"\n'
         'sudo install -o root -g wheel -m 0440 "$RULE" '
         '/etc/sudoers.d/csm-vm\n'
+        'rm -f "$RULE"\n'),
+    'reboot-sudo': (
+        'Let Orca restart this machine without a password',
+        'if [ "$(uname)" = Darwin ]; then\n'
+        '  COMMAND="/sbin/shutdown -r now"; GROUP=wheel\n'
+        'else\n'
+        '  COMMAND="$(command -v systemctl) reboot"; GROUP=root\n'
+        'fi\n'
+        'RULE="$(mktemp)"\n'
+        'echo "$(id -un) ALL=(root) NOPASSWD: $COMMAND" > "$RULE"\n'
+        'sudo visudo -cf "$RULE"\n'
+        'sudo install -o root -g "$GROUP" -m 0440 "$RULE" '
+        '/etc/sudoers.d/orca-reboot\n'
         'rm -f "$RULE"\n'),
     'vm-tools': (
         'Install QEMU and socat with Homebrew',

@@ -7,6 +7,7 @@ Small HTTP server for Orca's web interface (standard library only).
     GET  /api/events                        Server-Sent Events: a "snapshot",
                                             then incremental updates
     POST /api/machines/<id>/reconnect       drop and retry a machine's link
+    POST /api/machines/<id>/restart         restart it (a VM host: its VM too)
     GET  /api/machines/<id>/host-key        scan a route's unknown host key
     POST /api/machines/<id>/host-key        trust it {"fingerprints": [...]}
     GET  /api/machines/<id>/processes/<process>/output?from=N
@@ -356,6 +357,8 @@ class HttpServer:
         if method == 'POST' and parts == ['reconnect']:
             orca.reconnect(machine_id)
             return {'ok': True}
+        if method == 'POST' and parts == ['restart']:
+            return await orca.restarter.restart(machine_id)
         if parts == ['host-key']:
             link = orca.link(machine_id)
             if method == 'GET':

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import posixpath
+import re
 
 from .runs import PlanError, Run, expandHome, newRunId
 
@@ -23,7 +24,13 @@ VM_ACTIONS = {
     'commit': (['--clean'], False, 'Commit VM overlay'),
     'backup': (['--backup'], False, 'Back up VM disk'),
     'restore': (['--restore'], False, 'Restore VM disk'),
+    # A saved session (an overlay a power cut left): make it the VM's
+    # overlay again, or delete it. The file name follows the flag.
+    'recover': (['--recover'], False, 'Recover saved VM session'),
+    'forget': (['--forget'], False, 'Delete saved VM session'),
 }
+SAVED_OVERLAY_NAME = re.compile(
+    r'^ubuntu-aarch64-overlay\.(saved-[0-9-]+|backup)\.qcow2$')
 OVERLAY_CHOICES = ('commit', 'reuse', 'discard')
 # After a start, the guest boots for a while; wake its link a few times
 # instead of waiting out the reconnect back-off.
@@ -66,6 +73,14 @@ class VmController:
         if action == 'restore' and disks.get('backup_bytes') is None:
             raise PlanError('there is no backup to restore')
 
+    def savedName(self, vm: dict, options: dict) -> str:
+        name = str(options.get('name') or '')
+        known = [entry['name'] for entry in (vm or {}).get('saved_overlays')
+                 or []]
+        if not SAVED_OVERLAY_NAME.match(name) or name not in known:
+            raise PlanError('no saved session %s' % name)
+        return name
+
     def run(self, machine_id: str, action: str, options: dict) -> Run:
         if action not in VM_ACTIONS:
             raise PlanError('unknown VM action ' + action)
@@ -75,6 +90,8 @@ class VmController:
         self.check(link, action, link.state['vm'])
         flags, _, label = VM_ACTIONS[action]
         argv = [self.scriptPath(link)] + flags
+        if action in ('recover', 'forget'):
+            argv.append(self.savedName(link.state['vm'], options))
         if action in ('start', 'restart'):
             overlay = options.get('overlay') or 'reuse'
             if overlay not in OVERLAY_CHOICES:

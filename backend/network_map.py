@@ -39,7 +39,8 @@ class DeviceBook:
     def see(self, mac: Optional[str], address: str, source: str,
             name: Optional[str] = None, seen_by: Optional[str] = None,
             now_s: Optional[float] = None):
-        if not mac or not address:
+        # ARP tables list broadcast addresses too (ff:ff:ff:ff:ff:ff).
+        if not mac or not address or mac.lower() == 'ff:ff:ff:ff:ff:ff':
             return
         now_s = time.time() if now_s is None else now_s
         try:
@@ -264,7 +265,8 @@ def buildNetworkModel(links: list, devices: list, constants: dict,
         if device['mac'] in own_macs or device['address'] in own_addresses:
             continue
         network = index.find(device['address'])
-        if network is None:
+        if network is None or ipaddress.ip_address(device['address']) == \
+                ipaddress.ip_network(network).broadcast_address:
             continue
         label = names_by_address.get(device['address'])
         is_gateway = gateways.get(network) == device['address']

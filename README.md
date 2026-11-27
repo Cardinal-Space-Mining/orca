@@ -67,7 +67,7 @@ both). Machines of your own go in `~/.config/orca/machines.json` (see
 
 | Page | What it does |
 |---|---|
-| Network | Every machine and the networks between them, as a **map** (networks as lines, machines hanging from them by their ports, other devices on the lines; click anything for details) or a **list** of machine cards. A card: connection, load, network (incl. Wi-Fi channel), where an offline machine was last seen, whether it runs the same code as yours, its setup checklist, a terminal, and on a mac host its VM (start, shut down, restart, force stop, commit the overlay, back up, restore, serial console). Also the comm-link bandwidth budget, internet sharing over Ethernet, live traffic, Wi-Fi channels, and ping / port check / network scan from any machine. **Add a machine** finds a new machine (scan, shared port or address), sets up SSH access and writes its entry; **Edit machines** changes the inventory files in the app. |
+| Network | Every machine and the networks between them, as a **map** (networks as lines, machines hanging from them by their ports, other devices on the lines; click anything for details) or a **list** of machine cards. A card: connection, load, network (incl. Wi-Fi channel), where an offline machine was last seen, whether it runs the same code as yours, its setup checklist, a terminal, **Restart** (a mac host shuts its VM down first and starts it again after: the remote way to recover a USB adapter macOS lost), and on a mac host its VM (start, shut down, restart, force stop, commit the overlay, back up, restore, serial console). Also the comm-link bandwidth budget, internet sharing over Ethernet, live traffic, Wi-Fi channels, and ping / port check / network scan from any machine. **Add a machine** finds a new machine (scan, shared port or address), sets up SSH access and writes its entry; **Edit machines** changes the inventory files in the app. |
 | Launch | Pick a scenario, assign machines to its roles, add `action:=preset` arguments (typed or picked from the config's actions and presets), check the exact commands, launch. **Save as scenario…** turns the choices into a new scenario to name and save. |
 | Runs | Everything launched, deployed or pulled, with live output per process (filter by text, level or node), stop all or one. **Run again…** opens Launch with a run's machines, options and arguments filled in. |
 | Deploy | Push your laptop's workspace (`<ws>/src`) to other machines and build there; compare first to see exactly what changes. |
@@ -352,7 +352,8 @@ offered once an identical copy is on your laptop.
 
 - **Terminal** on any machine card opens a shell there, in a dock at the
   bottom of every page (several at once, in tabs). It replaces `ssh` for
-  anything the pages don't cover.
+  anything the pages don't cover. It starts in the machine's workspace, or
+  on a VM host in its csm-vm checkout.
 - **Serial console** on a running VM connects to its serial port, so you can
   log in and fix networking while the VM's own network is down (what
   `run-vm.sh --term` was for, without stopping the VM). Every key goes to the

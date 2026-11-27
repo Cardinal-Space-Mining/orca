@@ -10,7 +10,9 @@ import {
     html, Icon, MACHINE_ICONS, PORT_ICONS, StatusDot, formatAgo, postJson,
 } from './common.js';
 import { startAddMachine } from './addmachine.js';
-import { MachineCard, machinesWithRuns } from './machines.js';
+import {
+    MachineCard, RestartStatus, csmVmProblems, machinesWithRuns,
+} from './machines.js';
 import { BudgetPanel, Sparkline, ToolsPanel, formatKbps } from './network.js';
 import { HelperNotice, isReady } from './sharing.js';
 import { openTerminal } from './terminals.js';
@@ -319,10 +321,16 @@ function MachineBox({ box, height, entry, reference, isSelected,
                     : ''}>${`CPU ${Math.round(stats.cpu_percent || 0)}%`}
                     </span>`}
                 <span class="spacer"></span>
+                ${entry && html`<${RestartStatus} restart=${entry.restart}
+                    compact=${true} />`}
                 ${isOnline && vm && vm.is_running && html`<span class="pill good"
                     title="Its VM is running">VM</span>`}
                 ${todo > 0 && html`<span class="pill warn"
                     title="Setup items to do">${`setup ${todo}`}</span>`}
+                ${isOnline && vm && csmVmProblems(vm.repo).length > 0 && html`
+                    <span class="pill warn" title=${`csm-vm (${vm.repo.branch
+                        }): ${csmVmProblems(vm.repo).join(', ')}`}>csm-vm ±
+                    </span>`}
                 ${workspace && workspace.fingerprint && reference
                     && !machine.is_local && (workspace.fingerprint === reference
                     ? html`<span class="pill good" title="Same code as yours">

@@ -272,6 +272,8 @@ class MachineLink:
             'vm': None,
             'sharing': None,
             'setup': None,
+            # A restart from the card in progress (restart.py)
+            'restart': None,
         }
         # Terminals running a setup fix: re-check when they end.
         self.setup_terminals = set()

@@ -764,6 +764,47 @@ OLD_EEE_UDEV_RULE = '/etc/udev/rules.d/70-orchestrator-eee.rules'
 CAN_COMMANDS = ('/usr/bin/slcand', 'link set can0 up')
 VM_COMMANDS = ('/opt/homebrew/bin/qemu-system-aarch64',
                '/opt/homebrew/bin/socat')
+# What run-vm.sh runs as root: QEMU, its monitor (socat), force stop (kill)
+# and committing an overlay root made (qemu-img).
+VM_SUDO_COMMANDS = VM_COMMANDS + ('/bin/kill', '/opt/homebrew/bin/qemu-img')
+
+
+# The files a split run-vm.sh sources, as it names them:
+# source "$SCRIPTPATH/lib/common.sh"
+RUN_VM_LIBRARY = re.compile(r'^\s*source "\$SCRIPTPATH/(lib/[\w.-]+\.sh)"',
+                            re.M)
+
+
+def missingRunVmLibraries(script: str, text: str) -> list:
+    folder = os.path.dirname(script)
+    return [name for name in RUN_VM_LIBRARY.findall(text)
+            if not os.path.isfile(os.path.join(folder, name))]
+
+
+def rebootCommand():
+    '''The command that restarts this machine (run as root).'''
+    if IS_MACOS:
+        return ['/sbin/shutdown', '-r', 'now']
+    return [shutil.which('systemctl') or '/usr/bin/systemctl', 'reboot']
+
+
+def rebootMachine(check_only=False):
+    '''Restart this machine now, without a password. {"needs_password":
+    true, "command"} when sudo would ask for one (Orca then runs the
+    command in a terminal instead); check_only just says which.'''
+    argv = rebootCommand()
+    is_root = os.geteuid() == 0
+    if not is_root and not sudoAllows(argv):
+        return {'ok': False, 'needs_password': True,
+                'command': ['sudo'] + argv}
+    if check_only:
+        return {'ok': True}
+    # Detached, and a moment from now, so this answer reaches Orca first.
+    subprocess.Popen(['/bin/sh', '-c', 'sleep 1; exec "$@"', 'reboot']
+                     + (argv if is_root else ['sudo', '-n'] + argv),
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+    return {'ok': True}
 
 
 def sudoAllows(argv):
@@ -802,6 +843,13 @@ def setupChecks(options):
                        'detail': detail})
 
     user = getpass.getuser()
+    if not options.get('is_local'):
+        allowed = os.geteuid() == 0 or sudoAllows(rebootCommand())
+        check('reboot-sudo', 'Restart without a password',
+              'ok' if allowed else 'optional',
+              'Restart on its card restarts it in one click.' if allowed
+              else 'Restart on its card opens a terminal to type the '
+              'sudo password in.')
     if not IS_MACOS:
         if not options.get('is_local'):
             linger = (runCommand(['loginctl', 'show-user', user, '-p',
@@ -866,22 +914,31 @@ def setupChecks(options):
                       'No run-vm.sh in %s.' % vm_path)
             else:
                 current = '--overlay' in text and 'SERIAL_SOCKET' in text
+                safe_stop = 'STOP_TIMEOUT_S' in text
+                missing = missingRunVmLibraries(script, text)
                 check('csm-vm', 'csm-vm run-vm.sh',
-                      'ok' if current else 'todo',
-                      'Supports --overlay and the serial console.' if current
-                      else 'An older run-vm.sh: starting the VM from the '
-                      'orca can stop at a question, and there is no '
-                      'serial console.')
+                      'ok' if current and safe_stop and not missing
+                      else 'todo',
+                      'run-vm.sh is missing %s, so it can\'t run.'
+                      % ', '.join(missing) if missing else
+                      'Supports --overlay, the serial console and a stop '
+                      'timeout.' if current and safe_stop
+                      else 'An older run-vm.sh: Shut down can wait forever '
+                      'for a hung VM, and Force stop can\'t kill it.'
+                      if current else 'An older run-vm.sh: starting the VM '
+                      'from the orca can stop at a question, and there is '
+                      'no serial console.')
             tools = [path for path in VM_COMMANDS if not os.path.exists(path)]
             check('vm-tools', 'QEMU and socat', 'ok' if not tools else 'todo',
                   'Installed with Homebrew.' if not tools else
                   'Missing %s (brew install qemu socat).' % ', '.join(tools))
-            allowed = all(sudoAllows([path]) for path in VM_COMMANDS)
+            allowed = all(sudoAllows([path]) for path in VM_SUDO_COMMANDS)
             check('vm-sudo', 'VM control without a password',
                   'ok' if allowed else 'todo',
-                  'run-vm.sh can start and stop the VM.' if allowed else
-                  'sudo asks for a password for QEMU / socat, so the VM '
-                  'can\'t be started from Orca.')
+                  'run-vm.sh can start, stop and force-stop the VM.'
+                  if allowed else 'sudo asks for a password for QEMU, '
+                  'socat, kill or qemu-img, so starting, stopping or '
+                  'force-stopping the VM from Orca fails.')
     if options.get('workspace'):
         distros = installedRosDistros()
         check('ros', 'ROS 2', 'ok' if distros else 'todo',
@@ -1639,6 +1696,15 @@ def autostartDaemons():
         try:
             with open(path, 'rb') as file:
                 plist = plistlib.load(file)
+        except PermissionError:
+            # Installed readable by root only (a umask of 077): go by its
+            # name, as autostart.sh names it (com.<user>.run-vm).
+            name = os.path.basename(path)
+            if 'run-vm' in name:
+                daemons.append({'label': name[:-len('.plist')],
+                                'path': path, 'arguments': [],
+                                'run_at_load': None})
+            continue
         except Exception:
             continue
         arguments = plist.get('ProgramArguments') or []
@@ -1647,6 +1713,93 @@ def autostartDaemons():
                             'arguments': arguments,
                             'run_at_load': bool(plist.get('RunAtLoad'))})
     return daemons
+
+
+def repositoryStatus(path):
+    '''Edits in a git checkout that exist only on this machine (the csm-vm
+    scripts): uncommitted files, commits the current branch hasn't pushed,
+    and commits on any local branch that no remote branch has. Compared
+    with the remotes as of the last fetch: nothing here goes to the
+    network. None when path isn't a git checkout.'''
+    root = os.path.expanduser(path)
+    if git(root, 'rev-parse', 'HEAD') is None:
+        return None
+    # Not git(): stripping would eat the first line's status column.
+    porcelain = [line for line in (runCommand(
+        ['git', '-C', root, 'status', '--porcelain']) or '').splitlines()
+        if line]
+
+    def count(*args):
+        output = git(root, 'rev-list', '--count', *args)
+        return int(output) if output and output.isdigit() else None
+
+    upstream = git(root, 'rev-parse', '--abbrev-ref',
+                   '--symbolic-full-name', '@{u}')
+    return {
+        'branch': git(root, 'rev-parse', '--abbrev-ref', 'HEAD'),
+        'upstream': upstream,
+        'num_changes': len(porcelain),
+        'changed_files': [line[3:] for line in porcelain[:8]],
+        # The current branch against its upstream; without one, its commits
+        # that no remote has.
+        'num_ahead': count('@{u}..HEAD') if upstream
+        else count('HEAD', '--not', '--remotes'),
+        'num_behind': count('HEAD..@{u}') if upstream else None,
+        # Every local branch: work left on a branch that isn't checked out.
+        'num_unpushed': count('--branches', '--not', '--remotes'),
+    }
+
+
+def overlayStatus(path, is_running=False, qemu_log=None):
+    '''Who made the VM's overlay and whether it's safe to commit: one a
+    force stop left behind is marked "<overlay>.unclean" by run-vm.sh, and
+    one root made (an old autostart) needs root to commit. An overlay of a
+    VM that QEMU says was stopped by a signal (the mac shut down with it
+    running) is unclean too, marked or not: run-vm.sh marks it on its next
+    run.'''
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    # run-vm.sh (and its watcher) record every exit of QEMU they see; none
+    # recorded means it never got to (a power cut, an e-stop), and
+    # "terminating on signal" means it was stopped, e.g. with the mac.
+    log = readText(qemu_log) if qemu_log is not None else None
+    signalled = not is_running and log is not None and (
+        'terminating on signal' in log or '--- QEMU exited' not in log)
+    try:
+        import pwd
+        owner = pwd.getpwuid(info.st_uid).pw_name
+    except (ImportError, KeyError):
+        owner = str(info.st_uid)
+    return {
+        'owner': owner,
+        'is_writable': os.access(path, os.W_OK),
+        'modified_s': info.st_mtime,
+        'is_unclean': os.path.exists(path + '.unclean') or signalled,
+        # Brought back from the saved sessions: stopping it won't commit it
+        'is_recovered': os.path.exists(path + '.recovered'),
+    }
+
+
+SAVED_OVERLAY_PATTERN = re.compile(
+    r'^ubuntu-aarch64-overlay\.(saved-[0-9-]+|backup)\.qcow2$')
+
+
+def savedOverlays(root):
+    '''Sessions that didn't shut down, kept by run-vm.sh (newest first):
+    their overlays, recoverable with run-vm.sh --recover.'''
+    saved = []
+    for name in os.listdir(root) if os.path.isdir(root) else []:
+        if not SAVED_OVERLAY_PATTERN.match(name):
+            continue
+        try:
+            info = os.stat(os.path.join(root, name))
+        except OSError:
+            continue
+        saved.append({'name': name, 'bytes': info.st_size,
+                      'modified_s': info.st_mtime})
+    return sorted(saved, key=lambda entry: -entry['modified_s'])
 
 
 def vmStatus(csm_vm_path):
@@ -1667,7 +1820,12 @@ def vmStatus(csm_vm_path):
         'backup_bytes': fileSize(
             os.path.join(root, 'ubuntu-aarch64-base.backup.qcow2')),
     }
+    status['overlay'] = overlayStatus(
+        os.path.join(root, 'ubuntu-aarch64-overlay.qcow2'),
+        status['is_running'], os.path.join(root, 'qemu.log'))
+    status['saved_overlays'] = savedOverlays(root)
     status['autostart'] = autostartDaemons()
+    status['repo'] = repositoryStatus(csm_vm_path)
     return status
 
 
@@ -2038,6 +2196,8 @@ class Terminal:
         self.terminal_id = terminal_id
         self.argv = params['argv']
         self.cwd = os.path.expanduser(params.get('cwd') or '~')
+        if not os.path.isdir(self.cwd):  # a folder not made yet: start home
+            self.cwd = os.path.expanduser('~')
         self.columns = int(params.get('cols', 100))
         self.rows = int(params.get('rows', 30))
         self.extra_env = params.get('env') or {}
@@ -2285,6 +2445,7 @@ class Daemon:
             'setup.check': self.methodSetupCheck,
             'share.up': self.methodShareUp,
             'share.down': self.methodShareDown,
+            'machine.reboot': self.methodMachineReboot,
             'bags.list': self.methodBagsList,
             'bags.delete': self.methodBagsDelete,
             'logs.list': self.methodLogsList,
@@ -2450,6 +2611,10 @@ class Daemon:
 
     async def methodShareDown(self, session, params):
         return await self.inThread(shareDown, params)
+
+    async def methodMachineReboot(self, session, params):
+        return await self.inThread(rebootMachine,
+                                   bool(params.get('check_only')))
 
     async def methodNetNeighbours(self, session, params):
         '''{ip: mac} of hosts this machine has talked to recently.'''

@@ -30,6 +30,7 @@ from .settings import (SETTINGS_PATH, loadSettings, mergeDefaults,
                        saveSettings, validateChanges)
 from .scenarios import (SCENARIO_DIRECTORY, loadScenarios,
                         parseScenarioText)
+from .restart import Restarter
 from .setup import Setup
 from .sharing import Sharing
 from .vm import VmController
@@ -59,6 +60,7 @@ class Orca:
         self.planner = Planner(self)
         self.deployer = Deployer(self)
         self.vm = VmController(self)
+        self.restarter = Restarter(self)
         self.stop_event = None
         self.settings = loadSettings()
         self.budget = BudgetTracker(self)
@@ -386,12 +388,17 @@ class Orca:
             check_id = str((options or {}).get('check'))
             params['argv'] = await self.setup.fixCommand(link, check_id)
             title = 'Set up %s · %s' % (check_id, link.machine.label)
+        elif kind == 'restart':
+            params['argv'] = await self.restarter.terminalArgv(machine_id)
+            title = 'Restart · %s' % link.machine.label
         elif kind == 'install-key':
             target = (options or {}).get('target') or {}
             params['argv'] = self.discovery.keyCommand(target)
             title = 'Install SSH key · %s' % target.get('address')
         else:
-            params['cwd'] = link.machine.workspace or '~'
+            # A VM host starts in its csm-vm checkout, where run-vm.sh is.
+            params['cwd'] = ((link.machine.vm and link.machine.vm.csm_vm_path)
+                             or link.machine.workspace or '~')
             title = 'Shell · %s' % link.machine.label
         opened = await link.call('terminal.open', params)
         link.terminals.add(opened['terminal_id'])

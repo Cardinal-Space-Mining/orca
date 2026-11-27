@@ -169,7 +169,12 @@ def buildNetworkModel(links: list, devices: list, constants: dict,
     {"machine_id", "name"}.'''
     robot_link = robot_link or {}
     index = NetworkIndex()
-    online = [link for link in links if link['stats']]
+    # An offline machine keeps its last stats (its card says where it was
+    # last seen), but those describe networks it may have left long ago:
+    # only machines online now make networks and say what's on them. An
+    # offline one still shows its ports on networks that exist.
+    online = [link for link in links if link['stats']
+              and link['connection']['state'] == 'online']
 
     # Every network first, widest ranges winning.
     for link in sorted(online, key=lambda link: link['machine']['id']):
@@ -189,9 +194,11 @@ def buildNetworkModel(links: list, devices: list, constants: dict,
     for link in links:
         machine = link['machine']
         stats = link['stats'] or {}
+        is_online = link['connection']['state'] == 'online'
         route = stats.get('default_route') or {}
         sessions = {session['downstream']: session for session in
-                    ((link.get('sharing') or {}).get('sessions') or [])}
+                    ((link.get('sharing') or {}).get('sessions') or [])} \
+            if is_online else {}
         ports = []
         for interface in stats.get('interfaces', []):
             if interface.get('mac'):
@@ -199,8 +206,9 @@ def buildNetworkModel(links: list, devices: list, constants: dict,
             if not isPort(interface):
                 continue
             addresses = usableNetworks(interface)
-            for address in addresses:
-                own_addresses.add(str(address.ip))
+            if is_online:
+                for address in addresses:
+                    own_addresses.add(str(address.ip))
             network = index.find(addresses[0].ip) if addresses else None
             wifi = interface.get('wifi') or {}
             port = {
@@ -225,6 +233,8 @@ def buildNetworkModel(links: list, devices: list, constants: dict,
                 members.setdefault(network, []).append({
                     'machine_id': machine['id'], 'port': interface['name'],
                     'address': str(addresses[0].ip)})
+                if not is_online:
+                    continue  # its gateway and Wi-Fi may be long gone
                 if port['is_default_route'] and route.get('gateway'):
                     gateways[network] = route['gateway']
                 if wifi.get('ssid'):

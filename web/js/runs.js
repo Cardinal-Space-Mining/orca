@@ -4,6 +4,7 @@ import { useState } from 'preact/hooks';
 import { html, formatDuration, formatAgo, getJson, postJson }
     from './common.js';
 import { Console } from './console.js';
+import { launchAgain } from './launch.js';
 import { outputStore } from './state.js';
 
 
@@ -163,6 +164,12 @@ function RunDetail({ run, now, isCompetition }) {
                         run.started_s, now)} · ${run.run_id}`}</span>
                 </div>
                 <div class="button-row">
+                    ${run.kind === 'launch' && run.plan && run.plan.choices
+                        && run.scenario_id && html`<button class="button"
+                        title="Open the launch page with this run's machines,
+                            options and arguments"
+                        onClick=${() => launchAgain(run.scenario_id,
+                            run.plan.choices)}>Run again…</button>`}
                     ${processes.length > 1 && html`<button class="button"
                         onClick=${() => setSideBySide(!sideBySide)}>
                         ${sideBySide ? 'Tabs' : 'Side by side'}</button>`}

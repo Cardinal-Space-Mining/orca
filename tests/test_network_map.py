@@ -98,6 +98,47 @@ class NetworkMapTest(unittest.TestCase):
         self.assertEqual(book.snapshot(now_s=10.0)[0]['address'], '10.0.0.5')
         self.assertEqual(book.snapshot(now_s=100000.0), [])
 
+    def test_offline_machines_make_no_networks(self):
+        # The VM went offline: its last stats still name 10.11.11.0/24 and
+        # 192.168.18.0/24, but only the 192.168 one still has an online
+        # member (the mac), and the desktop stopped sharing.
+        links = [
+            link({'id': 'local', 'label': 'Desktop', 'is_local': True},
+                 [port('wlp5s0', 'wifi', 'aa:04', '10.0.0.104/24',
+                       wifi={'ssid': 'home'})],
+                 route={'interface': 'wlp5s0', 'gateway': '10.0.0.1'}),
+            LINKS[1],
+            link({'id': 'mac-vm', 'label': 'VM', 'host': 'mac'},
+                 [port('enp0s1', 'wifi', 'cc:01', '10.11.11.38/24',
+                       wifi={'ssid': 'old'}),
+                  port('enp0s2', 'ethernet', 'cc:02', '192.168.18.2/24')],
+                 route={'interface': 'enp0s1', 'gateway': '10.11.11.1'},
+                 state='offline'),
+            link({'id': 'robot', 'label': 'Robot'},
+                 [port('eth0', 'ethernet', 'ee:01', '10.11.10.1/24')],
+                 sharing={'sessions': [{'name': 'share',
+                                        'downstream': 'eth0'}]},
+                 state='offline'),
+        ]
+        book = DeviceBook()
+        book.see('dd:09', '10.11.10.3', 'neighbour', now_s=1000.0)
+        model = buildNetworkModel(links, book.snapshot(now_s=1001.0), {})
+        networks = {entry['cidr']: entry for entry in model['networks']}
+        self.assertEqual(set(networks), {'10.0.0.0/24', '10.20.0.0/24',
+                                         '192.168.18.0/24'})
+        self.assertEqual(networks['10.0.0.0/24']['ssids'], ['home'])
+        # The offline VM still hangs from the network its host is on.
+        self.assertEqual({member['machine_id'] for member
+                          in networks['192.168.18.0/24']['members']},
+                         {'mac', 'mac-vm'})
+        vm = next(entry for entry in model['machines']
+                  if entry['id'] == 'mac-vm')
+        self.assertEqual({entry['name']: entry['network']
+                          for entry in vm['ports']},
+                         {'enp0s1': None, 'enp0s2': '192.168.18.0/24'})
+        # A device on a vanished network isn't shown.
+        self.assertEqual(model['devices'], [])
+
     def test_machine_kind(self):
         self.assertEqual(machineKind({'id': 'x', 'icon': 'laptop'}, {}),
                          'laptop')

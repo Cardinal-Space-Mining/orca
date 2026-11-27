@@ -18,12 +18,15 @@ import { trafficStore } from './traffic.js';
 
 
 // Columns widen to fill the map, then the whole map scales (CSS zoom) to the
-// width it has, so it neither leaves space nor needs a scrollbar.
+// width it has. Below MIN_SCALE text gets too small to read: the map keeps
+// that scale and scrolls sideways instead. Each machine's column is at least
+// as wide as its ports' names, and the boxes are as tall as the fullest one
+// (measured after drawing, so long names, big fonts and many addresses fit).
 const MIN_COLUMN = 210;
-const MAX_COLUMN = 280;
-const MIN_SCALE = 0.65;
+const MAX_COLUMN = 300;
+const MIN_SCALE = 0.8;
 const MAX_SCALE = 1.25;
-const MIN_MAP_WIDTH = 760;   // room for the busiest network's label row
+const MIN_MAP_WIDTH = 480;
 const RIGHT = 30;
 const COLUMN_GAP = 26;
 const GUEST_GAP = 16;        // between a host and its VM in their frame
@@ -32,9 +35,12 @@ const TOP = 44;              // room for the first network's label
 const LINE_GAP = 54;
 const LOOSE_PORT_WIDTH = 30; // a port on no network: just its icon
 const PORT_HEIGHT = 24;
+const PORT_GAP = 4;
+const PORT_CHROME = 36;      // a port tab's padding, border, icon and gap
+const MAX_PORT_WIDTH = 170;  // longer names are cut (the tooltip has them)
 const BOX_GAP = 40;          // between the last line and the port chips
-const BOX_HEIGHT = 152;
-const MAX_PORTS = 4;
+const MIN_BOX_HEIGHT = 152;
+const MAX_LOOSE_PORTS = 2;   // ports on no network shown as icons
 const BUSY_DEVICES = 3;      // more on a network than this: show a count
 const NETWORK_ICONS = {
     lan: 'network', share: 'share-2', 'host-only': 'arrow-left-right',
@@ -45,11 +51,31 @@ const DEVICE_ICONS = { router: 'router', lidar: 'radar', device: 'circle-dot' };
 
 // --- Layout ------------------------------------------------------------------
 
+// Every port on a network (each has its line), then a few loose ones.
 function visiblePorts(machine) {
-    const shown = machine.ports.filter((port) => port.addresses.length
-        || port.is_up || port.sharing || port.label === 'USB Ethernet');
-    return { shown: shown.slice(0, MAX_PORTS),
-        hidden: machine.ports.length - Math.min(shown.length, MAX_PORTS) };
+    const linked = machine.ports.filter((port) => port.network);
+    const loose = machine.ports.filter((port) => !port.network
+        && (port.addresses.length || port.is_up || port.sharing
+            || port.label === 'USB Ethernet')).slice(0, MAX_LOOSE_PORTS);
+    const shown = machine.ports.filter((port) => linked.includes(port)
+        || loose.includes(port));
+    return { shown, hidden: machine.ports.length - shown.length };
+}
+
+// The width of a port tab's name, in the page's font.
+let measureContext = null;
+function textWidth(text) {
+    if (!measureContext) {
+        measureContext = document.createElement('canvas').getContext('2d');
+    }
+    measureContext.font = `11.5px ${getComputedStyle(document.body)
+        .fontFamily}`;
+    return measureContext.measureText(text).width;
+}
+
+function portWidth(port, measure) {
+    return port.network ? Math.min(MAX_PORT_WIDTH,
+        Math.ceil(measure(port.name) + PORT_CHROME)) : LOOSE_PORT_WIDTH;
 }
 
 // Columns: the inventory's order, each VM right after its host.
@@ -105,15 +131,41 @@ function clamp(value, low, high) {
     return Math.min(high, Math.max(low, value));
 }
 
-export function layoutMap(model, available = 1200) {
+// Ports of one machine: tabs as wide as their names, side by side from the
+// box's left edge; spare width goes to the ports on networks, so their lines
+// spread out. Returns the width the machine needs.
+function placePorts(machine, shown, x, column, y, measure, ports) {
+    const widths = shown.map((port) => portWidth(port, measure));
+    const needed = 12 + widths.reduce((total, width) =>
+        total + width + PORT_GAP, 0);
+    const numLinked = shown.filter((port) => port.network).length;
+    const spare = numLinked ? Math.max(0, column - needed) / numLinked : 0;
+    let cursor = x + 6;
+    shown.forEach((port, index) => {
+        const slot = widths[index] + PORT_GAP + (port.network ? spare : 0);
+        ports.push({
+            machine, port, y, x: cursor + slot / 2,
+            width: port.network ? Math.max(widths[index],
+                Math.min(slot - 6, 140)) : LOOSE_PORT_WIDTH,
+        });
+        cursor += slot;
+    });
+    return needed;
+}
+
+// available: the map's width on screen. measured: what the drawn map
+// needs ({boxHeight, labelWidth}, from the previous render).
+export function layoutMap(model, available = 1200, measured = {},
+    measure = textWidth) {
     const { mapped, offline } = splitMachines(model.machines);
     const groups = machineGroups(mapped);
     const numGuests = groups.reduce((total, group) =>
         total + group.length - 1, 0);
     const fixed = LEFT + RIGHT + Math.max(groups.length - 1, 0) * COLUMN_GAP
         + numGuests * GUEST_GAP;
-    const column = mapped.length ? clamp((available - fixed)
-        / mapped.length, MIN_COLUMN, MAX_COLUMN) : MIN_COLUMN;
+    const base = mapped.length ? clamp((available - fixed) / mapped.length,
+        MIN_COLUMN, MAX_COLUMN) : MIN_COLUMN;
+    const boxHeight = Math.max(MIN_BOX_HEIGHT, measured.boxHeight || 0);
     const lineY = {};
     model.networks.forEach((network, index) => {
         lineY[network.id] = TOP + index * LINE_GAP;
@@ -129,23 +181,16 @@ export function layoutMap(model, available = 1200) {
         group.forEach((machine, index) => {
             if (index) x += GUEST_GAP;
             const { shown, hidden } = visiblePorts(machine);
-            boxes.push({ machine, x, y: boxY, hidden, width: column });
-            // Ports on a network share the width; loose ones are icons.
-            const numLoose = shown.filter((port) => !port.network).length;
-            const numLinked = shown.length - numLoose;
-            const portSpace = column - 12 - numLoose * (LOOSE_PORT_WIDTH + 4);
-            const linkedWidth = numLinked ? portSpace / numLinked : 0;
-            let cursor = x + 6;
-            for (const port of shown) {
-                const slot = port.network ? linkedWidth : LOOSE_PORT_WIDTH + 4;
-                ports.push({
-                    machine, port, y: boxY - PORT_HEIGHT,
-                    x: cursor + slot / 2,
-                    width: port.network ? Math.min(slot - 6, 140)
-                        : LOOSE_PORT_WIDTH,
-                });
-                cursor += slot;
+            const firstPort = ports.length;
+            const needed = placePorts(machine, shown, x, base,
+                boxY - PORT_HEIGHT, measure, ports);
+            const column = Math.max(base, needed);
+            if (column > base) {  // widened: lay its ports out again
+                ports.length = firstPort;
+                placePorts(machine, shown, x, column, boxY - PORT_HEIGHT,
+                    measure, ports);
             }
+            boxes.push({ machine, x, y: boxY, hidden, width: column });
             x += column;
         });
         if (group.length > 1) {
@@ -155,7 +200,11 @@ export function layoutMap(model, available = 1200) {
         x += COLUMN_GAP;
     }
 
-    const width = Math.max(x - COLUMN_GAP + RIGHT, MIN_MAP_WIDTH);
+    const content = Math.max(x - COLUMN_GAP + RIGHT, MIN_MAP_WIDTH,
+        (measured.labelWidth || 0) + RIGHT);
+    const scale = clamp(available / content, MIN_SCALE, MAX_SCALE);
+    // Lines run the whole width the map has on screen.
+    const width = Math.max(content, Math.floor(available / scale));
     const devicesByMac = Object.fromEntries(model.devices.map((device) =>
         [device.mac, device]));
     const lines = model.networks.map((network) => ({
@@ -163,8 +212,7 @@ export function layoutMap(model, available = 1200) {
         x1: LEFT - 10, x2: width - 16,
     }));
     return { boxes, frames, ports, lines, lineY, offline, width,
-        height: boxY + BOX_HEIGHT + 44, boxY,
-        scale: clamp(available / width, MIN_SCALE, MAX_SCALE) };
+        height: boxY + boxHeight + 44, boxY, boxHeight, scale };
 }
 
 function trafficWidth(port) {
@@ -201,7 +249,8 @@ function Lines({ layout, machinesById }) {
         <svg class="map-lines" width=${layout.width} height=${layout.height}>
             ${layout.frames.map((frame) => html`<rect class="map-frame"
                 x=${frame.x} y=${layout.boxY - PORT_HEIGHT - 10}
-                width=${frame.width} height=${BOX_HEIGHT + PORT_HEIGHT + 20}
+                width=${frame.width} height=${layout.boxHeight + PORT_HEIGHT
+                    + 20}
                 rx="12" />`)}
             ${layout.lines.map((line) => html`<line
                 class="map-bus ${line.network.kind}" x1=${line.x1} y1=${line.y}
@@ -229,7 +278,8 @@ function Lines({ layout, machinesById }) {
         </svg>`;
 }
 
-function MachineBox({ box, entry, reference, isSelected, onSelect }) {
+function MachineBox({ box, height, entry, reference, isSelected,
+    onSelect }) {
     const machine = box.machine;
     const info = entry && entry.info;
     const stats = entry && entry.stats;
@@ -243,17 +293,17 @@ function MachineBox({ box, entry, reference, isSelected, onSelect }) {
     return html`
         <div class="map-box ${isOnline ? '' : 'offline'} ${isSelected
             ? 'selected' : ''}" style=${`left: ${box.x}px; top: ${box.y}px; `
-            + `width: ${box.width}px; height: ${BOX_HEIGHT}px`}
+            + `width: ${box.width}px; height: ${height}px`}
             onClick=${() => onSelect(`m:${machine.id}`)}>
             <div class="map-box-head">
                 <${Icon} name=${MACHINE_ICONS[machine.kind]} size=${18} />
-                <b>${machine.label}</b>
+                <b title=${machine.label}>${machine.label}</b>
                 <span class="spacer"></span>
                 <${StatusDot} state=${connection.state} />
             </div>
-            <div class="faint map-box-os">${info ? info.os
-                : connection.state}</div>
-            <div class="map-addresses">${addressed.slice(0, 3).map((port) =>
+            <div class="faint map-box-os" title=${info ? info.os : ''}>${info
+                ? info.os : connection.state}</div>
+            <div class="map-addresses">${addressed.map((port) =>
                 html`<span><${Icon} name=${PORT_ICONS[port.label]}
                     size=${12} /><span class="mono">${
                     port.addresses[0].split('/')[0]}</span></span>`)}
@@ -269,7 +319,7 @@ function MachineBox({ box, entry, reference, isSelected, onSelect }) {
                     : ''}>${`CPU ${Math.round(stats.cpu_percent || 0)}%`}
                     </span>`}
                 <span class="spacer"></span>
-                ${vm && vm.is_running && html`<span class="pill good"
+                ${isOnline && vm && vm.is_running && html`<span class="pill good"
                     title="Its VM is running">VM</span>`}
                 ${todo > 0 && html`<span class="pill warn"
                     title="Setup items to do">${`setup ${todo}`}</span>`}
@@ -313,15 +363,47 @@ function useElementWidth() {
     return [reference, width];
 }
 
+// What the drawn map needs: the fullest box's height and the widest network
+// label row (in the map's own pixels: offset sizes ignore its zoom).
+function boxContentHeight(box) {
+    const style = getComputedStyle(box);
+    const children = [...box.children];
+    return ['paddingTop', 'paddingBottom', 'borderTopWidth',
+        'borderBottomWidth'].reduce((total, name) =>
+        total + parseFloat(style[name]), 0)
+        + children.reduce((total, child) => total + child.offsetHeight, 0)
+        + (parseFloat(style.rowGap) || 0) * Math.max(children.length - 1, 0);
+}
+
+function useMeasuredMap(canvas) {
+    const [measured, setMeasured] = useState({});
+    useLayoutEffect(() => {
+        if (!canvas.current) return;
+        const boxHeight = Math.ceil(Math.max(0, ...[...canvas.current
+            .querySelectorAll('.map-box')].map(boxContentHeight)));
+        const labelWidth = Math.ceil(Math.max(0, ...[...canvas.current
+            .querySelectorAll('.map-line-label')].map((label) =>
+            label.offsetLeft + label.scrollWidth)));
+        if (boxHeight !== measured.boxHeight
+                || labelWidth !== measured.labelWidth) {
+            setMeasured({ boxHeight, labelWidth });
+        }
+    });
+    return measured;
+}
+
 function MapView({ state, now, model, selection, onSelect }) {
     const [container, available] = useElementWidth();
-    const layout = layoutMap(model, available || 1200);
+    const canvas = useRef(null);
+    const measured = useMeasuredMap(canvas);
+    const layout = layoutMap(model, available || 1200, measured);
     const machinesById = machinesWithRuns(state);
     const local = machinesById.local;
     const reference = local && local.workspace && local.workspace.fingerprint;
     return html`
         <div class="map-scroll" ref=${container}>
-            <div class="map-canvas" style=${`width: ${layout.width}px; `
+            <div class="map-canvas" ref=${canvas}
+                style=${`width: ${layout.width}px; `
                 + `height: ${layout.height}px; zoom: ${layout.scale}`}>
                 <${Lines} layout=${layout} machinesById=${machinesById} />
                 ${layout.lines.map((line) => html`
@@ -360,7 +442,7 @@ function MapView({ state, now, model, selection, onSelect }) {
                     </div>`)}
                 ${layout.frames.map((frame) => html`<div class="map-frame-label"
                     style=${`left: ${frame.x + 12}px; top: ${layout.boxY
-                        + BOX_HEIGHT + 14}px`}>${frame.label}</div>`)}
+                        + layout.boxHeight + 14}px`}>${frame.label}</div>`)}
                 ${layout.ports.map((entry) => {
                     const id = `p:${entry.machine.id}/${entry.port.name}`;
                     return html`<button class="map-port ${entry.port.network
@@ -377,7 +459,7 @@ function MapView({ state, now, model, selection, onSelect }) {
                     </button>`;
                 })}
                 ${layout.boxes.map((box) => html`<${MachineBox}
-                    key=${box.machine.id} box=${box}
+                    key=${box.machine.id} box=${box} height=${layout.boxHeight}
                     entry=${machinesById[box.machine.id]} reference=${reference}
                     isSelected=${selection === `m:${box.machine.id}`}
                     onSelect=${onSelect} />`)}
@@ -733,8 +815,10 @@ const PLACEMENT_KEY = 'orca.map-panel';
 function defaultPlacement() {
     const saved = window.localStorage.getItem(PLACEMENT_KEY);
     if (saved === 'side' || saved === 'below') return saved;
-    return window.innerWidth >= 1700
-        && window.innerWidth / window.innerHeight >= 2 ? 'side' : 'below';
+    // The page's width: a docked terminal takes part of the window.
+    const page = document.querySelector('main') || document.body;
+    return page.clientWidth >= 1650
+        && page.clientWidth / window.innerHeight >= 2 ? 'side' : 'below';
 }
 
 export function NetworkMap({ state, now, selection, onSelect }) {

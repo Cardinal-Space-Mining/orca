@@ -73,8 +73,9 @@ function CompetitionSwitch({ state }) {
             onClick=${() => postJson('/api/settings',
                 { competition_mode: !isOn })}>
             <${Icon} name="trophy" size=${15} />
-            <span>Competition${isOn && average != null
-                ? ` · ${Math.round(average)} kbps avg` : ''}</span>
+            <span class="switch-label">Competition${isOn
+                && average != null ? ` · ${Math.round(average)} kbps avg`
+                : ''}</span>
             <span class="switch-knob"></span>
         </button>`;
 }
@@ -96,17 +97,18 @@ function TopBar({ state, isLive, tab, navigate }) {
     const workspace = local && local.workspace;
     const numActiveRuns = state ? state.runs.filter(isRunActive).length : 0;
     return html`
-        <header class="topbar">
+        <header class="topbar"><div class="topbar-row">
             <div class="brand"><img src=${logoFor(theme)} alt="" />
                 Orca</div>
             <nav class="tabs">
                 ${TABS.map((entry) => html`
                     <button class="tab ${tab === entry.id ? 'active' : ''}"
-                        disabled=${entry.soon}
-                        title=${entry.iconOnly ? entry.label : ''}
+                        disabled=${entry.soon} title=${entry.label}
+                        aria-label=${entry.label}
                         onClick=${() => navigate(entry.id)}><${Icon}
                         name=${entry.icon} size=${15} />${entry.iconOnly ? ''
-                            : entry.label}
+                            : html`<span class="tab-label">${entry.label}
+                            </span>`}
                         ${entry.id === 'runs' && numActiveRuns > 0 && html`
                             <span class="badge">${numActiveRuns}</span>`}
                         ${entry.soon && html`<span class="soon">soon</span>`}
@@ -122,10 +124,12 @@ function TopBar({ state, isLive, tab, navigate }) {
             ${state && html`<${CompetitionSwitch} state=${state} />`}
             <${ThemeButton} />
             <div class="live">
-                <span class="dot ${isLive ? 'good' : 'bad pulse'}"></span>
-                ${isLive ? 'Live' : 'Orca disconnected'}
+                <span class="dot ${isLive ? 'good' : 'bad pulse'}"
+                    title=${isLive ? 'Live' : 'Orca disconnected'}></span>
+                <span class="live-label">${isLive ? 'Live'
+                    : 'Orca disconnected'}</span>
             </div>
-        </header>`;
+        </div></header>`;
 }
 
 function Page({ state, location, navigate, now }) {

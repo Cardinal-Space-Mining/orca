@@ -16,6 +16,7 @@ Small HTTP server for Orca's web interface (standard library only).
     POST /api/scenarios/<id>                {"text"}: check and save it
     POST /api/scenarios/<id>/check          {"text"}: check without saving
     POST /api/scenarios/<id>/delete
+    POST /api/scenarios/<id>/customize      {"choices"}: a new scenario's text
     POST /api/plan                          plan a launch (nothing starts)
     POST /api/runs                          launch
     POST /api/runs/<id>/stop
@@ -99,7 +100,7 @@ from .inventory import InventoryError
 from .config_edit import ConfigEditor, configFiles, overrideProblems
 from .lance_config import ConfigError
 from .link import AgentError
-from .runs import PlanError
+from .runs import PlanError, customizeScenario
 from .scenarios import (ScenarioError, deleteScenario, parseScenarioText,
                         readScenarioSource, writeScenario)
 
@@ -448,6 +449,19 @@ class HttpServer:
             return {'ok': True, 'scenario': scenario}
         if action == ['delete']:
             return {'path': deleteScenario(workspace, scenario_id)}
+        if action == ['customize']:
+            # A new scenario's text: this one with launch choices as its
+            # defaults (the editor saves it under a new id).
+            source = readScenarioSource(workspace, scenario_id)
+            if not source['exists']:
+                raise ScenarioError('no scenario ' + scenario_id)
+            data = customizeScenario(
+                parseScenarioText(scenario_id, source['text']),
+                request.json().get('choices') or {})
+            data.pop('id', None)
+            data['label'] = '%s (custom)' % (data.get('label')
+                                              or scenario_id)
+            return {'text': json.dumps(data, indent=4) + '\n'}
         if action == []:
             return {'path': writeScenario(workspace, scenario_id,
                                           request.json().get('text', ''))}

@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from 'preact/hooks';
 import { html, getJson, postJson, Icon } from './common.js';
-import { ScenarioForm } from './launch.js';
+import { ScenarioForm, takeScenarioDraft } from './launch.js';
 
 
 const TEMPLATE = {
@@ -59,10 +59,13 @@ function FormatHelp() {
 }
 
 export function ScenarioEditor({ state, scenarioId }) {
-    // "<id>~copy" duplicates <id>; no id is a new scenario.
-    const [sourceId, isCopy] = scenarioId
-        ? [scenarioId.replace(/~copy$/, ''), scenarioId.endsWith('~copy')]
-        : [null, false];
+    // "<id>~copy" duplicates <id>; "<id>~custom" is <id> with the launch
+    // page's choices (its text waits in the session); no id is a new
+    // scenario.
+    const suffix = (scenarioId || '').match(/~(copy|custom)$/);
+    const sourceId = scenarioId ? scenarioId.replace(/~(copy|custom)$/, '')
+        : null;
+    const isCopy = !!suffix;
     const isNew = !sourceId || isCopy;
     const [id, setId] = useState(isNew ? '' : sourceId);
     const [text, setText] = useState(null);
@@ -74,6 +77,14 @@ export function ScenarioEditor({ state, scenarioId }) {
         if (!sourceId) {
             setText(JSON.stringify(TEMPLATE, null, 4) + '\n');
             return;
+        }
+        if (suffix && suffix[1] === 'custom') {
+            const draft = takeScenarioDraft(sourceId);
+            if (draft) {
+                setId(`${sourceId}-custom`);
+                setText(draft);
+                return;
+            }
         }
         getJson(`/api/scenarios/${encodeURIComponent(sourceId)}/source`)
             .then((source) => {

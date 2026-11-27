@@ -508,7 +508,7 @@ export function TrafficPanel({ state }) {
             <p class="muted">Every interface on every machine, from its byte
                 counters (everything, not just robot code). Orca
                 column: Orca's own traffic with that machine.</p>
-            <table class="table">
+            <div class="table-wide"><table class="table">
                 <thead><tr><th>Machine</th><th>Interface</th><th>Address</th>
                     <th>Down</th><th>Up</th><th>Last 3 min</th>
                     <th>Orca</th>
@@ -531,7 +531,7 @@ export function TrafficPanel({ state }) {
                                     .orca_kbps)) : ''}
                             </td>
                     </tr>`)}</tbody>
-            </table>
+            </table></div>
         </section>`;
 }
 
@@ -548,7 +548,7 @@ export function WifiPanel({ state }) {
             <p class="muted">Arena runs are on channel 1 (2.4 GHz); the pits
                 use 5 GHz or Ethernet (guidebook 14.2 and 14.4). macOS hides
                 network names.</p>
-            <table class="table">
+            <div class="table-wide"><table class="table">
                 <thead><tr><th>Machine</th><th>Interface</th><th>Network</th>
                     <th>Channel</th><th>Band</th><th>Signal</th></tr></thead>
                 <tbody>${rows.map(({ entry, iface }) => {
@@ -570,7 +570,7 @@ export function WifiPanel({ state }) {
                         <td>${signal}</td>
                     </tr>`;
                 })}</tbody>
-            </table>
+            </table></div>
         </section>`;
 }
 

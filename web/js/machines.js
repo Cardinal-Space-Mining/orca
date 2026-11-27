@@ -604,8 +604,10 @@ function groupMachines(entries, machinesById) {
 export function Summary({ machines }) {
     const numOnline = machines.filter((entry) =>
         entry.connection.state === 'online').length;
+    // An offline host's VM status is from when it was last reachable.
     const numVmsRunning = machines.filter((entry) =>
-        entry.vm && entry.vm.is_running).length;
+        entry.connection.state === 'online' && entry.vm
+        && entry.vm.is_running).length;
     return html`
         <div class="summary">
             <div class="stat"><b>${numOnline} / ${machines.length}</b>

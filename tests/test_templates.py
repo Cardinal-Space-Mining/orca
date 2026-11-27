@@ -94,6 +94,10 @@ class OrderAndArgumentsTest(unittest.TestCase):
         self.assertEqual(parseExtraArguments(''), {})
         with self.assertRaises(PlanError):
             parseExtraArguments('not-an-argument')
+        with self.assertRaises(PlanError):
+            parseExtraArguments("name:='unclosed")
+        with self.assertRaises(PlanError):
+            parseExtraArguments(':=value')
 
 
 if __name__ == '__main__':

@@ -14,6 +14,7 @@ process), so a restarted Orca finds its runs again.
 from __future__ import annotations
 
 import asyncio
+import copy
 import ipaddress
 import os
 import posixpath
@@ -138,12 +139,43 @@ def dependencyOrder(processes: list) -> list:
 def parseExtraArguments(text: str) -> dict:
     '''"foxglove_bridge:=null redux:=client_mac_eth" -> dict.'''
     arguments = {}
-    for token in shlex.split(text or ''):
+    try:
+        tokens = shlex.split(text or '')
+    except ValueError as error:  # an unclosed quote
+        raise PlanError('extra arguments: %s' % error)
+    for token in tokens:
         if ':=' not in token:
             raise PlanError("extra argument '%s' isn't key:=value" % token)
         key, value = token.split(':=', 1)
+        if not key:
+            raise PlanError("extra argument '%s' has no key" % token)
         arguments[key] = value
     return arguments
+
+
+def customizeScenario(data: dict, choices: dict) -> dict:
+    '''A scenario file's data with launch choices made its defaults: the
+    machines and options chosen, and each process's extra arguments folded
+    into it (lance args, or the end of its command). Chosen addresses aren't
+    kept: {ip:role} stays, so the scenario still works on other networks.'''
+    data = copy.deepcopy(data)
+    for role, machine_id in (choices.get('assignment') or {}).items():
+        if isinstance((data.get('roles') or {}).get(role), dict):
+            data['roles'][role]['default'] = machine_id
+    for name, value in (choices.get('options') or {}).items():
+        if isinstance((data.get('options') or {}).get(name), dict):
+            data['options'][name]['default'] = value
+    extras = choices.get('extra_arguments') or {}
+    for process in data.get('processes') or []:
+        extra = (extras.get(process.get('key')) or '').strip()
+        if not extra:
+            continue
+        if isinstance(process.get('lance'), dict):
+            process['lance'].setdefault('args', {}).update(
+                parseExtraArguments(extra))
+        elif isinstance(process.get('command'), str):
+            process['command'] += ' ' + extra
+    return data
 
 
 class Planner:
@@ -160,19 +192,60 @@ class Planner:
         options = self.chooseOptions(scenario, request.get('options') or {})
         plan = {'scenario_id': scenario['id'], 'label': scenario.get('label'),
                 'assignment': assignment, 'options': options,
-                'processes': [], 'errors': [], 'warnings': []}
+                'processes': [], 'errors': [], 'warnings': [],
+                # What it was planned from: a run keeps it, so the launch
+                # page can fill the same choices in again.
+                'choices': {
+                    'assignment': assignment, 'options': options,
+                    'addresses': dict(request.get('addresses') or {}),
+                    'extra_arguments': dict(
+                        request.get('extra_arguments') or {}),
+                }}
         for role, machine_id in assignment.items():
             self.checkMachine(scenario, role, machine_id, plan)
         if plan['errors']:
             return plan
         self.checkSameCode(scenario, assignment, plan)
         try:
-            for process in dependencyOrder(scenario.get('processes') or []):
-                plan['processes'].append(
-                    self.planProcess(process, assignment, options, request))
-        except (PlanError, ScenarioError, ConfigError) as error:
+            ordered = dependencyOrder(scenario.get('processes') or [])
+        except PlanError as error:
             plan['errors'].append(str(error))
+            return plan
+        # Each process is planned on its own: one that fails (a bad extra
+        # argument, say) stays in the plan with its error, so the page keeps
+        # its fields and the mistake can be fixed there.
+        for process in ordered:
+            try:
+                entry = self.planProcess(process, assignment, options,
+                                         request)
+                if entry.get('error'):
+                    plan['errors'].append('%s: %s' % (entry['label'],
+                                                      entry['error']))
+                plan['processes'].append(entry)
+            except (PlanError, ScenarioError, ConfigError) as error:
+                label = process.get('label') or process['key']
+                plan['errors'].append('%s: %s' % (label, error))
+                plan['processes'].append(
+                    self.failedProcess(process, assignment, str(error)))
         return plan
+
+    def failedProcess(self, process, assignment, error: str) -> dict:
+        '''A plan entry for a process that couldn't be planned: enough to
+        show it (and its extra arguments) with its error. Never launched:
+        a plan with errors doesn't start.'''
+        link = self.orca.links_by_id[assignment[process['role']]]
+        return {
+            'key': process['key'],
+            'label': process.get('label') or process['key'],
+            'role': process['role'],
+            'machine_id': link.machine.id,
+            'machine_label': link.machine.label,
+            'kind': 'lance' if 'lance' in process else 'command',
+            'after': process.get('after') or [],
+            'address_roles': [], 'addresses': {}, 'address_choices': {},
+            'overlay': None, 'selected': None,
+            'display': '', 'error': error,
+        }
 
     # --- Inputs ---
 
@@ -268,31 +341,35 @@ class Planner:
         addresses, choices = self.addressesFor(process, assignment, request)
         used_roles = sorted({argument for name, argument
                              in placeholdersIn(process) if name == 'ip'})
-        for used_role in used_roles:
-            if used_role not in addresses:
-                raise PlanError(
-                    '%s: no network shared by %s and %s; set the address by '
-                    'hand' % (process.get('label', process['key']),
-                              link.machine.label,
-                              self.orca.links_by_id[
-                                  assignment[used_role]].machine.label))
+        missing = [used_role for used_role in used_roles
+                   if used_role not in addresses]
         entry = {
             'key': process['key'],
             'label': process.get('label') or process['key'],
             'role': role,
             'machine_id': link.machine.id,
             'machine_label': link.machine.label,
+            'kind': 'lance' if 'lance' in process else 'command',
             'after': process.get('after') or [],
             'start_delay_s': process.get('start_delay_s',
                                          DEFAULT_START_DELAY_S),
             'address_roles': used_roles,
             'addresses': {used_role: addresses[used_role]
-                          for used_role in used_roles},
+                          for used_role in used_roles
+                          if used_role in addresses},
             'address_choices': {used_role: choices[used_role]
                                 for used_role in used_roles},
             'overlay': None,
             'selected': None,
         }
+        if missing:
+            # Returned with its address pickers, so it can be set by hand.
+            entry['display'] = ''
+            entry['error'] = 'no network shared by %s and %s; set the ' \
+                'address by hand' % (link.machine.label, ', '.join(
+                    self.orca.links_by_id[assignment[used_role]].machine.label
+                    for used_role in missing))
+            return entry
         extra = (request.get('extra_arguments') or {}).get(process['key'], '')
         if 'lance' in process:
             self.planLance(process['lance'], entry, link, options, addresses,
